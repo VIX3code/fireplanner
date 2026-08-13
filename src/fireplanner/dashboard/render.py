@@ -491,7 +491,13 @@ def render_html(p, title: str = "FirePlanner") -> str:
 </footer>"""
     )
 
-    return _CSS + f'<main class="viz-root">{"".join(sections)}</main>' + _JS
+    # <title> first so any host that scans only the head of the file finds it.
+    return (
+        f"<title>{html.escape(title)}</title>"
+        + _CSS
+        + f'<main class="viz-root">{"".join(sections)}</main>'
+        + _JS
+    )
 
 
 _CSS = """
