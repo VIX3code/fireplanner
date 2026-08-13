@@ -14,3 +14,7 @@ dashboard.html
 
 # Live account state (balances, positions) — never commit
 data/snapshots/account.json
+
+# deployment secrets
+deploy/.env
+site/

@@ -1,0 +1,13 @@
+[Unit]
+Description=Regenerate the FirePlanner site on a daily-bar cadence
+
+[Timer]
+# Shortly after the US close, Monday to Friday. Daily bars do not change
+# intraday, so anything more frequent is wasted broker calls.
+OnCalendar=Mon..Fri 16:30 America/New_York
+# Catch up if the machine was asleep at the scheduled time.
+Persistent=true
+RandomizedDelaySec=300
+
+[Install]
+WantedBy=timers.target

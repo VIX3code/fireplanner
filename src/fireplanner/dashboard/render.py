@@ -277,7 +277,17 @@ def render_html(p, title: str = "FirePlanner") -> str:
         )
         plan = p.trade_plan or {}
         plan_rows = []
-        if plan.get("shares"):
+        if plan.get("entry") and not plan.get("shares"):
+            # Redacted build: the levels are public, the size is not.
+            tgt = plan.get("r_multiple_targets", {})
+            plan_rows = [
+                ["Entry (last close)", fmt(plan["entry"], 2)],
+                ["Initial stop (2.5 x ATR)", f"{fmt(plan['stop'], 2)} &nbsp;<span class='muted-txt'>"
+                 f"-{fmt(100 * (1 - plan['stop'] / plan['entry']), 2)}%</span>"],
+                ["Targets 1R / 2R / 3R", " · ".join(fmt(tgt.get(k), 2) for k in ["1R", "2R", "3R"])],
+                ["Position size", "<span class='muted-txt'>redacted</span>"],
+            ]
+        elif plan.get("shares"):
             tgt = plan.get("r_multiple_targets", {})
             plan_rows = [
                 ["Entry (last close)", fmt(plan["entry"], 2)],

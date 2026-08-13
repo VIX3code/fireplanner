@@ -383,7 +383,7 @@ def add_decision(
     payload.decision_history = list(reversed(history))[:12]
     payload.total_changes = int(len(changes))
 
-    ref = reference_date or pd.Timestamp.utcnow().normalize().tz_localize(None)
+    ref = reference_date or pd.Timestamp.now('UTC').tz_localize(None).normalize()
     payload.staleness_days = int((ref - d.index[-1]).days)
 
     eb = payload.exposure_basis

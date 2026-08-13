@@ -1,0 +1,44 @@
+# Caddy fetches and renews a TLS certificate automatically for a real domain.
+#
+# The auth block is not optional decoration. Even a redacted build publishes your
+# live trading signal; an unredacted one publishes your balance sheet. Pick one of
+# the three approaches below and delete the others.
+
+{$DOMAIN:localhost} {
+	root * /srv
+	encode gzip
+	file_server
+
+	# ---- Option 1: basic auth (simplest) ---------------------------------
+	# Generate the hash with:  docker run --rm caddy:2-alpine caddy hash-password
+	basic_auth {
+		{$AUTH_USER:admin} {$AUTH_HASH}
+	}
+
+	# ---- Option 2: an identity proxy in front (Cloudflare Access, oauth2-proxy)
+	# Drop the basic_auth block above and terminate auth at the proxy instead.
+	# forward_auth oauth2-proxy:4180 {
+	#     uri /oauth2/auth
+	#     copy_headers X-Auth-Request-Email
+	# }
+
+	# ---- Option 3: no public exposure at all -----------------------------
+	# The safest option, and the one to prefer if you are the only reader: bind
+	# this to a Tailscale/WireGuard address and never open 80/443 to the world.
+
+	header {
+		# The pages are fully self-contained, so the policy can be this tight.
+		Content-Security-Policy "default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; img-src data:; font-src data:"
+		X-Content-Type-Options nosniff
+		X-Frame-Options DENY
+		Referrer-Policy no-referrer
+		Strict-Transport-Security "max-age=31536000; includeSubDomains"
+		# Financial output should never be cached by an intermediary.
+		Cache-Control "private, max-age=300, must-revalidate"
+	}
+
+	log {
+		output stdout
+		format console
+	}
+}

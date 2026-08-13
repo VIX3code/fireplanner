@@ -1,0 +1,29 @@
+# Bare-metal alternative to the Docker compose stack, for a box that already
+# runs IB Gateway (or TWS) natively.
+#
+#   sudo cp deploy/fireplanner.{service,timer} /etc/systemd/system/
+#   sudo systemctl enable --now fireplanner.timer
+
+[Unit]
+Description=FirePlanner — regenerate the S&P 500 signal site
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=fireplanner
+WorkingDirectory=/opt/fireplanner
+Environment=FIREPLANNER_PROVIDER=gateway
+ExecStart=/opt/fireplanner/.venv/bin/fireplanner \
+    --provider gateway --port 4002 --cache \
+    publish SPY --core 0.40 --redact -o /var/www/fireplanner
+
+# The service only ever reads from the broker and writes one directory.
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/www/fireplanner /opt/fireplanner/.cache
+
+[Install]
+WantedBy=multi-user.target

@@ -206,6 +206,30 @@ def cmd_desk(args) -> int:
     return 0
 
 
+def cmd_publish(args) -> int:
+    from .dashboard import build_payload
+    from .dashboard.build import add_decision
+    from .publish import publish_site
+    from .signals import AllocationPolicy
+
+    provider = _provider(args)
+    payload = build_payload(
+        provider, benchmark=args.benchmark, vol_symbol=args.vol_symbol,
+        breadth_symbol=args.breadth_symbol, term_symbol=args.term_symbol,
+        watchlist=args.symbols or None, lookback_days=args.lookback,
+        equity=args.equity if args.equity > 0 else None,
+    )
+    payload = add_decision(payload, policy=AllocationPolicy(core_weight=args.core,
+                                                            sleeve_max=1.0 - args.core))
+    manifest = publish_site(payload, out_dir=args.output, redact=args.redact)
+    print(f"\n  wrote {manifest['out_dir']}/  (redacted: {manifest['redacted']})")
+    for name, size in manifest["files"].items():
+        print(f"    {name:20s} {size:>9,} bytes")
+    d = payload.decision
+    print(f"\n  signal: {d['action']}  target {d['target_pct'] * 100:.0f}%  as of {d['date']}\n")
+    return 0
+
+
 def cmd_dashboard(args) -> int:
     from .dashboard import build_payload, render_html
 
@@ -274,6 +298,15 @@ def main(argv=None) -> int:
     s.add_argument("--core", type=float, default=0.40,
                    help="permanent core allocation, never sold")
     s.set_defaults(func=cmd_desk)
+
+    s = sub.add_parser("publish", help="write the static site (index + both pages)")
+    s.add_argument("symbols", nargs="*")
+    s.add_argument("-o", "--output", default="site")
+    s.add_argument("--equity", type=float, default=0.0)
+    s.add_argument("--core", type=float, default=0.40)
+    s.add_argument("--redact", action="store_true",
+                   help="strip balances, positions and trade sizes - required for public hosting")
+    s.set_defaults(func=cmd_publish)
 
     s = sub.add_parser("dashboard", help="render the HTML dashboard")
     s.add_argument("symbols", nargs="*")

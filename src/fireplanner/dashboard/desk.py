@@ -151,7 +151,14 @@ def render_desk(p, title: str = "S&P 500 Signal Desk") -> str:
     )
 
     # ---------------------------------------------------------------- the instruction
-    if action == "HOLD":
+    redacted = bool(d.get("redacted"))
+    if redacted and action in {"BUY", "SELL"}:
+        # Account figures are stripped for public hosting, so express the
+        # instruction as a move along the ladder rather than a share count.
+        verb = "Increase" if action == "BUY" else "Reduce"
+        headline = f"{verb} to {target * 100:.0f}%"
+        sub = f"From {current * 100:.0f}% of equity to {target * 100:.0f}%."
+    elif action == "HOLD":
         headline = "No action today"
         sub = f"Hold {target * 100:.0f}% of equity in {bench}."
     elif action == "WAIT":
@@ -170,9 +177,10 @@ def render_desk(p, title: str = "S&P 500 Signal Desk") -> str:
 
     eb = p.exposure_basis or {}
     if eb.get("basis") == "total_equity":
+        across = f" across {eb['n_positions']} positions" if "n_positions" in eb else ""
         basis_line = (
             f"&ldquo;Now&rdquo; is your <strong>total equity exposure</strong> "
-            f"({eb['total_equity_pct']:.0f}% across {eb['n_positions']} positions), not your "
+            f"({eb['total_equity_pct']:.0f}%{across}), not your "
             f"{html.escape(bench)} position of {eb['benchmark_pct']:.0f}%."
         )
     elif eb.get("basis") == "explicit":

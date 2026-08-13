@@ -19,6 +19,7 @@ fireplanner scan SPY NVDA ZS MP FTNT                 # score a watchlist
 fireplanner plan SPY --equity 77674                  # size a position
 fireplanner backtest SPY --core-weight 0.4           # strategy vs buy-and-hold
 fireplanner dashboard SPY NVDA ZS -o dashboard.html  # the full analysis page
+fireplanner publish --redact -o site                 # static site, safe to host
 ```
 
 Two pages, deliberately separate. **`desk`** answers *what should I do today* — one
@@ -324,6 +325,38 @@ Panels: regime banner with component meters · indicator tiles with sparklines �
 its trend anchors · two years of regime score · signal breakdown · a trade plan sized to your
 real net liquidation · watchlist scorecard · your live book with concentration and headroom vs
 the regime cap · backtest evidence with the caveats above printed next to the numbers.
+
+---
+
+## Deploying it
+
+**IBKR's API is not a cloud API.** Both transports need a long-lived, interactively
+authenticated desktop process on `localhost`, IBKR forces a daily re-auth, and most accounts
+require 2FA. There is no API key to paste into a serverless environment variable — so Vercel,
+Netlify, Lambda and Cloudflare Workers are all out for the *data* tier.
+
+The pages, though, are another matter: `fireplanner publish` emits fully self-contained HTML
+with **zero external requests**, so they host anywhere. The shape that works is two tiers:
+
+```
+  PRIVATE (holds the broker session)          ANY STATIC HOST
+  IB Gateway → fireplanner publish  ──HTML──▶ Caddy / S3 / Pages, behind auth
+```
+
+```bash
+fireplanner publish --redact -o site     # percentages and prices only
+rsync -av --delete site/ user@host:/var/www/fireplanner/
+```
+
+**Always `--redact` for anything anyone else can reach.** Unredacted pages publish your net
+liquidation, every position and your trade sizes. Redaction strips all of it while keeping the
+targets, prices and regime, so the signal survives and the balance sheet does not —
+`tests/test_publish.py` asserts on the rendered bytes that no account figure leaks.
+
+`deploy/` ships a Docker Compose stack (IB Gateway + generator + Caddy with TLS and auth, with
+the gateway on an internal-only network and no published ports), systemd unit and timer for a
+bare-metal box, and a Caddyfile with three auth options. Full guide, including the
+market-data redistribution caveat: **[docs/DEPLOYMENT.md](docs/DEPLOYMENT.md)**.
 
 ---
 
