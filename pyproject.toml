@@ -1,0 +1,31 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "fireplanner"
+version = "0.1.0"
+description = "Swing/position trading research and monitoring stack for S&P 500 index and single names, wired to Interactive Brokers"
+requires-python = ">=3.10"
+dependencies = [
+    "pandas>=2.0",
+    "numpy>=1.24",
+    "pyyaml>=6.0",
+]
+
+[project.optional-dependencies]
+# TWS / IB Gateway socket API (the local, full-featured path).
+gateway = ["ib_async>=1.0"]
+# Client Portal Web API path (REST, no desktop app required).
+web = ["requests>=2.31"]
+cache = ["pyarrow>=14.0"]
+dev = ["pytest>=7.4"]
+
+[project.scripts]
+fireplanner = "fireplanner.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

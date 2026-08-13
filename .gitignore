@@ -1,0 +1,16 @@
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+.pytest_cache/
+.cache/
+.venv/
+venv/
+.env
+dashboard.html
+*.parquet
+.DS_Store
+
+# Live account state (balances, positions) — never commit
+data/snapshots/account.json

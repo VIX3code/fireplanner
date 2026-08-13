@@ -1,0 +1,80 @@
+{
+  "as_of": "2026-08-13T00:00:00Z",
+  "base_currency": "USD",
+  "_comment": "Example only - synthetic quantities. Real account state is written to account.json, which is gitignored.",
+  "summary": {
+    "currency": "USD",
+    "net_liquidation": 100000.0,
+    "equity_with_loan_value": 40000.0,
+    "buying_power": 40000.0,
+    "gross_position_value": 60000.0,
+    "total_cash_value": 40000.0,
+    "available_funds": 40000.0,
+    "initial_margin": 0,
+    "maintenance_margin": 0,
+    "excess_liquidity": 40000.0,
+    "dividends": 0.0,
+    "leverage": "0.60"
+  },
+  "positions": [
+    {
+      "contract_id": 4815747,
+      "symbol": "NVDA",
+      "position": 40,
+      "market_price": 224.09,
+      "market_value": 8963.6,
+      "currency": "USD",
+      "average_price": 200.0,
+      "unrealized_pnl": 963.6,
+      "daily_pnl": 12.0,
+      "asset_class": "STK"
+    },
+    {
+      "contract_id": 310621426,
+      "symbol": "ZS",
+      "position": 50,
+      "market_price": 177.32,
+      "market_value": 8866.0,
+      "currency": "USD",
+      "average_price": 165.0,
+      "unrealized_pnl": 616.0,
+      "daily_pnl": -8.0,
+      "asset_class": "STK"
+    },
+    {
+      "contract_id": 70236214,
+      "symbol": "FTNT",
+      "position": 60,
+      "market_price": 160.84,
+      "market_value": 9650.4,
+      "currency": "USD",
+      "average_price": 150.0,
+      "unrealized_pnl": 650.4,
+      "daily_pnl": 14.0,
+      "asset_class": "STK"
+    }
+  ],
+  "quotes": {
+    "SPY": {
+      "last": 773.54,
+      "bid": 773.66,
+      "ask": 773.74,
+      "change_pct": 0.14,
+      "high_52w": 776.8400268554688,
+      "low_52w": 627.5960083007812,
+      "high_13w": 776.8400268554688,
+      "low_13w": 716.5800170898438,
+      "high_26w": 776.8400268554688,
+      "low_26w": 629.2899780273438,
+      "ytd_change_pct": 13.75,
+      "hv30_annual_pct": 12.26893089469494,
+      "iv_annual_pct": 11.82483262173171,
+      "iv_pctile_13w": 0.01587301678955555,
+      "iv_pctile_26w": 0.007936508394777775,
+      "iv_pctile_52w": 0.09163346886634827
+    },
+    "VIX": {
+      "last": 14.69
+    }
+  }
+}

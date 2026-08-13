@@ -1,0 +1,225 @@
+"""Command line entry point.
+
+    fireplanner regime                     # today's gate
+    fireplanner scan SPY NVDA ZS           # score a list of names
+    fireplanner plan SPY --equity 77674    # size a position
+    fireplanner backtest SPY               # strategy vs buy-and-hold
+    fireplanner dashboard -o out.html      # the full page
+
+``--provider gateway`` swaps the offline snapshot for a live TWS/IB Gateway
+connection; everything else is identical.
+"""
+
+from __future__ import annotations
+
+import argparse
+import sys
+
+import pandas as pd
+
+from . import indicators as ind
+from .backtest import buy_and_hold_stats, run_backtest
+from .data import CachedProvider, get_provider
+from .risk import RiskConfig, plan_position
+from .signals import latest_signal, score_frame
+
+
+def _provider(args):
+    kwargs = {}
+    if args.provider == "snapshot":
+        kwargs["root"] = args.snapshots
+    elif args.provider in {"gateway", "tws", "ib"}:
+        kwargs.update(host=args.host, port=args.port, client_id=args.client_id)
+    p = get_provider(args.provider, **kwargs)
+    if args.provider != "snapshot" and args.cache:
+        p = CachedProvider(p, throttle_seconds=0.3)
+    return p
+
+
+def _regime(provider, args):
+    bench = provider.history(args.benchmark, lookback_days=args.lookback)
+    vix = breadth = None
+    for sym, name in [(args.vol_symbol, "vix"), (args.breadth_symbol, "breadth")]:
+        try:
+            s = provider.history(sym, lookback_days=args.lookback)["close"]
+            if name == "vix":
+                vix = s
+            else:
+                breadth = s
+        except Exception:
+            print(f"  (note: {sym} unavailable)", file=sys.stderr)
+    return bench, ind.compute_regime(bench["close"], vix=vix, equal_weight=breadth)
+
+
+def cmd_regime(args) -> int:
+    provider = _provider(args)
+    _, regime = _regime(provider, args)
+    r = ind.latest_regime(regime)
+    print(f"\n  {args.benchmark} regime as of {r.date.date()}")
+    print(f"  {'-' * 46}")
+    print(f"  {r.label.upper():<16} score {r.score * 100:5.1f}/100")
+    print(f"  max deployable equity: {r.exposure_cap * 100:.0f}%\n")
+    for k, v in r.components.items():
+        bar = "#" * int(round((v or 0) * 20))
+        print(f"    {k:<10} {(v or 0) * 100:5.1f}  {bar}")
+    print()
+    return 0
+
+
+def cmd_scan(args) -> int:
+    provider = _provider(args)
+    _, regime = _regime(provider, args)
+
+    rows = []
+    for sym in args.symbols:
+        try:
+            bars = provider.history(sym, lookback_days=args.lookback)
+            e = ind.enrich(bars)
+            sig = latest_signal(sym, score_frame(e, regime=regime["score"]), e)
+        except Exception as exc:
+            print(f"  {sym}: {exc}", file=sys.stderr)
+            continue
+        d = sig.detail
+        rows.append(
+            {
+                "symbol": sym,
+                "action": sig.action,
+                "score": round(sig.score, 1),
+                "close": round(sig.close, 2),
+                "rsi": round(d.get("rsi14", float("nan")), 1),
+                "adx": round(d.get("adx", float("nan")), 1),
+                "atr%": round(d.get("natr14", float("nan")), 2),
+                "vs50d": round(d.get("pct_from_sma50", float("nan")), 1),
+                "vs52wh": round(d.get("dist_52w_high", float("nan")), 1),
+            }
+        )
+
+    if not rows:
+        print("no symbols scored", file=sys.stderr)
+        return 1
+    df = pd.DataFrame(rows).sort_values("score", ascending=False)
+    print()
+    print(df.to_string(index=False))
+    print()
+    return 0
+
+
+def cmd_plan(args) -> int:
+    provider = _provider(args)
+    _, regime = _regime(provider, args)
+    r = ind.latest_regime(regime)
+
+    e = ind.enrich(provider.history(args.symbol, lookback_days=args.lookback))
+    last = e.dropna(subset=["atr14"]).iloc[-1]
+    plan = plan_position(
+        args.symbol,
+        equity=args.equity,
+        entry=float(last["close"]),
+        atr=float(last["atr14"]),
+        cfg=RiskConfig(risk_pct=args.risk_pct, atr_stop_mult=args.atr_mult),
+        exposure_cap=r.exposure_cap,
+        open_heat=args.open_heat,
+    )
+    d = plan.as_dict()
+    print(f"\n  {args.symbol} position plan   (regime: {r.label}, cap {r.exposure_cap * 100:.0f}%)")
+    print(f"  {'-' * 52}")
+    print(f"    entry            {d['entry']:>12,.2f}")
+    print(f"    stop             {d['stop']:>12,.2f}   ({100 * (1 - d['stop'] / d['entry']):.2f}% away)")
+    print(f"    shares           {d['shares']:>12,.0f}")
+    print(f"    notional         {d['notional']:>12,.2f}")
+    print(f"    risk if stopped  {d['risk_dollars']:>12,.2f}   ({d['risk_pct_equity'] * 100:.2f}% of equity)")
+    print(f"    weight           {d['weight'] * 100:>11.1f}%")
+    print(f"    targets          " + "  ".join(f"{k} {v:,.2f}" for k, v in d["r_multiple_targets"].items()))
+    print(f"    limited by       {d['limited_by']}\n")
+    return 0
+
+
+def cmd_backtest(args) -> int:
+    provider = _provider(args)
+    _, regime = _regime(provider, args)
+    bars = provider.history(args.symbol, lookback_days=args.lookback)
+    e = ind.enrich(bars)
+    result = run_backtest(e, regime=regime["score"], symbol=args.symbol)
+    bh = buy_and_hold_stats(bars["close"].reindex(result.equity_curve.index).dropna())
+
+    print(f"\n  {args.symbol} — regime-gated swing model")
+    print(f"  {'-' * 52}")
+    print(result.summary())
+    print(f"\n  buy & hold, same window")
+    print(f"    CAGR {bh['cagr_pct']:.2f}%   vol {bh['vol_pct']:.2f}%   "
+          f"Sharpe {bh['sharpe']:.2f}   maxDD {bh['max_drawdown_pct']:.2f}%\n")
+    if args.trades and not result.trades.empty:
+        print(result.trades.to_string(index=False))
+        print()
+    return 0
+
+
+def cmd_dashboard(args) -> int:
+    from .dashboard import build_payload, render_html
+
+    provider = _provider(args)
+    payload = build_payload(
+        provider,
+        benchmark=args.benchmark,
+        vol_symbol=args.vol_symbol,
+        breadth_symbol=args.breadth_symbol,
+        watchlist=args.symbols or None,
+        lookback_days=args.lookback,
+        equity=args.equity if args.equity > 0 else None,
+    )
+    out = render_html(payload)
+    with open(args.output, "w") as f:
+        f.write(out)
+    print(f"wrote {args.output}  ({len(out):,} bytes)")
+    for n in payload.notes:
+        print(f"  note: {n}")
+    return 0
+
+
+def main(argv=None) -> int:
+    ap = argparse.ArgumentParser(prog="fireplanner", description=__doc__,
+                                 formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("--provider", default="snapshot", choices=["snapshot", "gateway", "web"])
+    ap.add_argument("--snapshots", default="data/snapshots")
+    ap.add_argument("--host", default="127.0.0.1")
+    ap.add_argument("--port", type=int, default=4002, help="7496 TWS live, 7497 TWS paper, 4001/4002 Gateway")
+    ap.add_argument("--client-id", type=int, default=17)
+    ap.add_argument("--cache", action="store_true", help="cache bars on disk between runs")
+    ap.add_argument("--benchmark", default="SPY")
+    ap.add_argument("--vol-symbol", default="VIX")
+    ap.add_argument("--breadth-symbol", default="RSP")
+    ap.add_argument("--lookback", type=int, default=1260)
+
+    sub = ap.add_subparsers(dest="cmd", required=True)
+
+    sub.add_parser("regime", help="print today's market gate").set_defaults(func=cmd_regime)
+
+    s = sub.add_parser("scan", help="score symbols")
+    s.add_argument("symbols", nargs="+")
+    s.set_defaults(func=cmd_scan)
+
+    s = sub.add_parser("plan", help="size a position")
+    s.add_argument("symbol")
+    s.add_argument("--equity", type=float, required=True)
+    s.add_argument("--risk-pct", type=float, default=0.0075)
+    s.add_argument("--atr-mult", type=float, default=2.5)
+    s.add_argument("--open-heat", type=float, default=0.0)
+    s.set_defaults(func=cmd_plan)
+
+    s = sub.add_parser("backtest", help="strategy vs buy-and-hold")
+    s.add_argument("symbol")
+    s.add_argument("--trades", action="store_true")
+    s.set_defaults(func=cmd_backtest)
+
+    s = sub.add_parser("dashboard", help="render the HTML dashboard")
+    s.add_argument("symbols", nargs="*")
+    s.add_argument("-o", "--output", default="dashboard.html")
+    s.add_argument("--equity", type=float, default=0.0)
+    s.set_defaults(func=cmd_dashboard)
+
+    args = ap.parse_args(argv)
+    return args.func(args)
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

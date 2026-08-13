@@ -1,0 +1,87 @@
+# FirePlanner configuration.
+#
+# Every value here is also a CLI flag or a dataclass field; this file is the
+# convenient place to keep a setup you actually trade rather than retyping flags.
+
+data:
+  provider: snapshot          # snapshot | gateway | web
+  snapshots_root: data/snapshots
+  lookback_days: 1260         # ~5 years of daily bars
+  cache: true
+  cache_root: .cache/bars
+  throttle_seconds: 0.3       # IBKR allows ~60 historical requests / 10 min
+
+  gateway:
+    host: 127.0.0.1
+    port: 4002                # 7496 TWS live · 7497 TWS paper · 4001/4002 Gateway
+    client_id: 17
+    readonly: true            # blocks order entry at the connection level
+
+  web:
+    base_url: https://localhost:5000/v1/api
+    verify: false             # CP gateway serves a self-signed cert on localhost
+
+universe:
+  benchmark: SPY
+  vol_symbol: VIX             # CBOE index — needs exchange=CBOE, not SMART
+  breadth_symbol: RSP         # equal-weight S&P, the participation proxy
+  watchlist:
+    - SPY
+    - NVDA
+    - ZS
+    - MP
+    - FTNT
+
+regime:
+  weights:                    # renormalized automatically if an input is missing
+    trend: 0.40
+    vol: 0.25
+    breadth: 0.20
+    drawdown: 0.15
+  vix_calm: 16.0
+  vix_stress: 25.0
+  # score -> maximum fraction of equity deployable
+  bands:
+    Risk-On: 1.00             # >= 0.80
+    Constructive: 0.75        # >= 0.60
+    Neutral: 0.50             # >= 0.40
+    Defensive: 0.25           # >= 0.20
+    Risk-Off: 0.00
+
+signals:
+  weights:
+    trend: 0.35
+    momentum: 0.30
+    entry: 0.20
+    quality: 0.15
+  buy_threshold: 65.0
+  add_threshold: 55.0
+  reduce_threshold: 40.0
+  min_adx: 18.0               # below this the tape is chop; score is capped
+  extended_rsi: 78.0          # entry quality collapses above this
+  extended_atr: 3.0           # ATRs above the 21-EMA that count as chasing
+
+risk:
+  risk_pct: 0.0075            # fraction of equity risked per position
+  atr_stop_mult: 2.5          # initial stop distance, in ATRs
+  atr_trail_mult: 3.0         # chandelier trail once the position is working
+  max_position_pct: 0.10      # cap for a diversified book
+  max_portfolio_heat: 0.06    # cap on summed open risk across all positions
+  max_gross_exposure: 1.00
+  target_vol: 0.15
+  min_notional: 500.0
+  whole_shares: true
+
+backtest:
+  initial_equity: 100000.0
+  commission_per_share: 0.0035   # IBKR tiered US equities
+  min_commission: 1.00
+  slippage_bps: 2.0
+  entry_score: 65.0
+  exit_score: 45.0
+  exit_on_sma50_break: true
+  exit_on_supertrend_flip: true
+  # Single-instrument tests override max_position_pct: that 10% cap is a
+  # diversification rule, and applying it here would leave 90% in cash and make
+  # the buy-and-hold comparison meaningless.
+  position_cap_pct: 1.00
