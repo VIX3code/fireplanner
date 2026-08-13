@@ -168,6 +168,44 @@ def cmd_backtest(args) -> int:
     return 0
 
 
+def cmd_desk(args) -> int:
+    from .dashboard import build_payload, render_desk
+    from .dashboard.build import add_decision
+    from .signals import AllocationPolicy
+
+    provider = _provider(args)
+    payload = build_payload(
+        provider, benchmark=args.benchmark, vol_symbol=args.vol_symbol,
+        breadth_symbol=args.breadth_symbol, term_symbol=args.term_symbol,
+        watchlist=[args.benchmark], lookback_days=args.lookback,
+        equity=args.equity if args.equity > 0 else None,
+    )
+    policy = AllocationPolicy(core_weight=args.core, sleeve_max=1.0 - args.core)
+    payload = add_decision(
+        payload, policy=policy,
+        current_weight=args.current if args.current >= 0 else None,
+        equity=args.equity if args.equity > 0 else None,
+    )
+    d = payload.decision
+    print(f"\n  {args.benchmark} — {d['date']}")
+    print(f"  {'-' * 56}")
+    print(f"    ACTION           {d['action']}")
+    print(f"    target           {d['target_pct'] * 100:.0f}% of equity")
+    print(f"    current          {d['current_pct'] * 100:.0f}%  ({payload.exposure_basis.get('basis')})")
+    if d["action"] not in {"HOLD", "WAIT"}:
+        print(f"    trade            {d['shares_delta']:+,.0f} shares  (${d['dollars_delta']:+,.0f})")
+    print(f"    regime           {d['regime_label']}  ·  score {d['score']:.0f}")
+    print(f"\n    {d['reason']}\n")
+    rel = payload.reliability
+    print(f"    reliability      {rel['changes_per_year']:.1f} changes/yr, "
+          f"{rel['reversal_pct']:.0f}% reversed within 10 sessions")
+    if args.output:
+        with open(args.output, "w") as f:
+            f.write(render_desk(payload))
+        print(f"\n    wrote {args.output}")
+    return 0
+
+
 def cmd_dashboard(args) -> int:
     from .dashboard import build_payload, render_html
 
@@ -227,6 +265,15 @@ def main(argv=None) -> int:
     s.add_argument("--core-weight", type=float, default=0.0,
                    help="fraction held permanently and never sold (0.4 is a reasonable start)")
     s.set_defaults(func=cmd_backtest)
+
+    s = sub.add_parser("desk", help="today's enter/exit instruction")
+    s.add_argument("-o", "--output", default="", help="also write the HTML signal desk")
+    s.add_argument("--equity", type=float, default=0.0)
+    s.add_argument("--current", type=float, default=-1.0,
+                   help="current equity exposure as a fraction (default: inferred from the account)")
+    s.add_argument("--core", type=float, default=0.40,
+                   help="permanent core allocation, never sold")
+    s.set_defaults(func=cmd_desk)
 
     s = sub.add_parser("dashboard", help="render the HTML dashboard")
     s.add_argument("symbols", nargs="*")

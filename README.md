@@ -13,12 +13,18 @@ It does four things:
 ```bash
 pip install -e ".[gateway,cache,dev]"
 
+fireplanner desk -o signal_desk.html                 # in or out, and by how much
 fireplanner regime                                   # today's market gate
 fireplanner scan SPY NVDA ZS MP FTNT                 # score a watchlist
 fireplanner plan SPY --equity 77674                  # size a position
-fireplanner backtest SPY                             # strategy vs buy-and-hold
-fireplanner dashboard SPY NVDA ZS -o dashboard.html  # the full page
+fireplanner backtest SPY --core-weight 0.4           # strategy vs buy-and-hold
+fireplanner dashboard SPY NVDA ZS -o dashboard.html  # the full analysis page
 ```
+
+Two pages, deliberately separate. **`desk`** answers *what should I do today* — one
+instruction, the reasoning, the levels that would change it. **`dashboard`** answers *what is the
+market doing* — the full indicator and evidence view. Reach for the desk daily and the dashboard
+when you want to argue with it.
 
 Every command runs out of the box against committed snapshots — real IBKR pulls frozen on
 2026-08-13 — so you can evaluate the whole thing before connecting a broker. Add
@@ -115,6 +121,85 @@ The edge is in the pullback, not the spike.
 distance cost exactly 0.75% of equity. Every position risks the same dollar amount. Capped by
 position weight, by total open risk ("portfolio heat"), and by the regime's exposure ceiling —
 and `limited_by` tells you which one bound.
+
+---
+
+## The signal desk — enter/exit, fully or partially
+
+`fireplanner desk` turns the model into one instruction: **what fraction of equity should sit in
+the index today.** Not a score, not a chart — a target, the trade to reach it, and the levels that
+would change it.
+
+**The allocation ladder.** A permanent core plus a tactical sleeve, in discrete steps:
+
+| Target | 40% | 55% | 70% | 85% | 100% |
+|---|---|---|---|---|---|
+| Sleeve filled | 0% | 25% | 50% | 75% | 100% |
+| Smoothed score to step **up** | — | 48 | 58 | 68 | 78 |
+| Smoothed score to fall **back** | 40 | 50 | 60 | 70 | — |
+
+The regime cap is a hard ceiling on top of that, and two confirmed closes below the 50-day empty
+the sleeve regardless of score.
+
+### Making it reliable took three iterations
+
+**A signal you cannot trust is worse than none, because following it costs money.** The first
+version was unusable and the numbers said so:
+
+| | Changes/yr | Reversed within 10 sessions |
+|---|---|---|
+| First cut (single threshold, 2-day confirm) | 24.3 | **61%** |
+| Shipped (smoothing + dead band + cooldown) | **7.6** | **3.2%** |
+
+Nearly two thirds of the original trades were undone within two weeks. Three fixes, each measured:
+
+1. **Smooth the score before laddering.** The raw score has a 4.9-point daily standard deviation and
+   crossed a fixed threshold 33 times in 250 sessions.
+2. **A Schmitt trigger** — separate up/down thresholds with a dead band, so a score loitering on a
+   boundary cannot oscillate.
+3. **A directional cooldown** — 21 sessions before *reversing* direction. Continuation is never
+   blocked, because blocking it would re-create the slow-re-entry problem the core exists to solve.
+
+**Reliability turned out to be free.** Damping the signal left risk-adjusted return within noise of
+the twitchy version while roughly halving the trade count — which is the only reason to trust it.
+Five years of rebalances cost **$33** in total.
+
+Two things the iterations disproved, both recorded in the code:
+
+- **Fast re-entry after a forced exit sounds right and is wrong.** A protective exit does lock you
+  out of part of the rebound — in July 2026, 15 sessions while the index rallied 3.4%. But
+  shortening the wait makes the target oscillate around the 50-day: reversal rate went 3.2% → 31.9%
+  and Sharpe 1.14 → 1.03. The lockout is cheaper than the churn.
+- **A "SELL" instruction can be wrong even when the target is right.** If the committed target is
+  waiting out a cooldown and the pending target is closer to what you already hold, trading now
+  means reversing within days. The desk emits **WAIT** in that case rather than a trade.
+
+### Following it vs owning the index
+
+| Metric | Following the signal | Buy & hold |
+|---|---|---|
+| CAGR | 9.31% | 16.08% |
+| Volatility | 8.13% | 16.73% |
+| Sharpe | **1.14** | 0.98 |
+| Max drawdown | **−8.78%** | −19.00% |
+| Best 20 days captured | 20/20 | 20/20 |
+| Average exposure | 55% | 100% |
+
+Lower return, materially better risk, and the core keeps every one of the best days. It changes
+about **8 times a year** — this is a position-sizing dial, not a trading signal. If you find
+yourself checking it daily for action, you are using it wrong.
+
+### What it will not do
+
+- **It will not dodge a fast crash.** The gate reacts to a *confirmed* break of the 50-day, so a
+  one-week collapse hits the core in full. That is the price of catching the best days, which
+  cluster in exactly those weeks.
+- **The core is a policy choice, not a signal.** At 40% it never goes lower however bad things look.
+  If you could not hold that through a 25% index drawdown, lower it before you need to
+  (`--core 0.25`).
+- **Read the target as total equity exposure.** A book of correlated single names is not cash. The
+  desk measures current exposure as gross positions over net liquidation by default, because
+  treating 24 tech names as flat would invert the instruction.
 
 ---
 

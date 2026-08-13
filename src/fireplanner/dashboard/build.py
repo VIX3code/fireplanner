@@ -36,6 +36,21 @@ class DashboardPayload:
     notes: list = field(default_factory=list)
     variants: list = field(default_factory=list)
     best_days: dict = field(default_factory=dict)
+    # ---- decision layer (populated by add_decision) ----
+    decision: dict = field(default_factory=dict)
+    allocation: pd.DataFrame | None = None
+    reliability: dict = field(default_factory=dict)
+    decision_history: list = field(default_factory=list)
+    ladder_steps: tuple = ()
+    score_smooth: float | None = None
+    next_steps: dict = field(default_factory=dict)
+    cooldown_days: int = 0
+    staleness_days: int | None = None
+    alloc_backtest: dict = field(default_factory=dict)
+    alloc_buyhold: dict = field(default_factory=dict)
+    exposure_note: str = ""
+    exposure_basis: dict = field(default_factory=dict)
+    total_changes: int = 0
 
 
 def build_payload(
@@ -217,3 +232,187 @@ def build_payload(
         variants=variants,
         best_days=best_days,
     )
+
+
+def add_decision(
+    payload: DashboardPayload,
+    policy=None,
+    current_weight: float | None = None,
+    equity: float | None = None,
+    reference_date: pd.Timestamp | None = None,
+) -> DashboardPayload:
+    """Attach the allocation decision layer to an existing payload.
+
+    ``current_weight`` is what you actually hold in the benchmark right now, as a
+    fraction of equity. Left as None it is inferred from the account's benchmark
+    position — which is usually zero, so the exposure note below matters.
+    """
+    from ..backtest import buy_and_hold_stats, run_allocation_backtest
+    from ..signals import AllocationPolicy, latest_decision, target_allocation, trigger_levels
+
+    policy = policy or AllocationPolicy()
+    bench = payload.benchmark
+    e = payload.enriched.get(bench)
+    if e is None or payload.regime is None:
+        payload.notes.append(f"No decision computed — {bench} history unavailable.")
+        return payload
+
+    scored = score_frame(e, regime=payload.regime["score"])
+    alloc = target_allocation(e, scored, payload.regime, policy)
+
+    summary = payload.account.get("summary", {}) if payload.account else {}
+    if equity is None:
+        equity = float(summary.get("net_liquidation", 100_000.0))
+
+    # What counts as "currently invested"?
+    #
+    # The benchmark position alone is the wrong basis for a book of correlated
+    # single names: this account holds no SPY but ~74% gross equity across 24
+    # names, and reading current exposure as 0% would turn a "trim" instruction
+    # into a "buy" one — doubling equity risk exactly when the model wants it cut.
+    # Total equity exposure is the honest default; the benchmark-only figure is
+    # kept alongside it so the basis is never ambiguous.
+    held_value = 0.0
+    if payload.positions is not None and not payload.positions.empty:
+        sym_col = "symbol" if "symbol" in payload.positions.columns else "contract_description"
+        match = payload.positions[payload.positions[sym_col].astype(str).str.upper() == bench.upper()]
+        held_value = float(match["market_value"].sum()) if not match.empty else 0.0
+
+    bench_weight = held_value / equity if equity else 0.0
+    gross_value = float(summary.get("gross_position_value", 0.0) or 0.0)
+    if not gross_value and payload.positions is not None and not payload.positions.empty:
+        gross_value = float(payload.positions["market_value"].sum())
+    total_equity_weight = gross_value / equity if equity else 0.0
+
+    payload.exposure_basis = {
+        "benchmark_pct": 100.0 * bench_weight,
+        "total_equity_pct": 100.0 * total_equity_weight,
+        "n_positions": int(len(payload.positions)) if payload.positions is not None else 0,
+        "basis": "total_equity",
+    }
+
+    if current_weight is None:
+        # Use total equity exposure whenever the book carries meaningful equity
+        # risk outside the benchmark itself.
+        if total_equity_weight - bench_weight > 0.05:
+            current_weight = total_equity_weight
+        else:
+            current_weight = bench_weight
+            payload.exposure_basis["basis"] = "benchmark"
+    else:
+        payload.exposure_basis["basis"] = "explicit"
+
+    triggers = trigger_levels(e, payload.regime, policy)
+    state = latest_decision(alloc, equity=equity, current_weight=current_weight,
+                            policy=policy, triggers=triggers)
+    payload.decision = state.as_dict()
+    payload.allocation = alloc
+    payload.ladder_steps = tuple(policy.core_weight + policy.sleeve_max * s for s in policy.steps)
+    payload.cooldown_days = policy.cooldown_days
+    payload.score_smooth = float(alloc["score_smooth"].dropna().iloc[-1])
+
+    # Where the next rung sits, in score terms.
+    fill = float(alloc["sleeve_fill"].iloc[-1])
+    try:
+        level = list(policy.steps).index(min(policy.steps, key=lambda s: abs(s - fill)))
+    except ValueError:
+        level = 0
+    nxt = {}
+    if level > 0:
+        nxt["down"] = {
+            "threshold": policy.ladder_down[level - 1],
+            "target": policy.core_weight + policy.sleeve_max * policy.steps[level - 1],
+        }
+    if level < len(policy.steps) - 1:
+        nxt["up"] = {
+            "threshold": policy.ladder_up[level],
+            "target": policy.core_weight + policy.sleeve_max * policy.steps[level + 1],
+        }
+    payload.next_steps = nxt
+
+    # ---- reliability ----------------------------------------------------
+    d = alloc.dropna(subset=["target"])
+    changes = d[d["changed"].fillna(False)]
+    years = max((d.index[-1] - d.index[0]).days / 365.25, 1e-9)
+    pos = {dt: i for i, dt in enumerate(d.index)}
+    idxs = list(changes.index)
+    dirs = np.sign(changes["target"].diff().fillna(0).to_numpy())
+    reversals = sum(
+        1 for i in range(len(idxs) - 1)
+        if pos[idxs[i + 1]] - pos[idxs[i]] <= 10 and dirs[i + 1] * dirs[i] < 0
+    )
+    gaps = np.diff([pos[x] for x in idxs]) if len(idxs) > 1 else np.array([0])
+
+    bt = run_allocation_backtest(
+        payload.bars[bench]["close"], payload.bars[bench]["open"], alloc["target"],
+        band=policy.min_trade_pct,
+    )
+    bh = buy_and_hold_stats(payload.bars[bench]["close"].reindex(bt.equity_curve.index).dropna())
+    payload.alloc_backtest = bt.stats
+    payload.alloc_buyhold = bh
+
+    payload.reliability = {
+        "changes_per_year": len(changes) / years,
+        "reversal_pct": 100.0 * reversals / max(1, len(changes) - 1),
+        # Measured with hysteresis disabled, so the improvement is not a claim.
+        "baseline_reversal_pct": _baseline_reversal(e, scored, payload.regime),
+        "median_gap": float(np.median(gaps)),
+        "avg_target_pct": 100.0 * float(d["target"].mean()),
+        "rebalances": bt.stats.get("rebalances", 0),
+        "total_costs": bt.stats.get("total_costs", 0.0),
+    }
+
+    prev = d["target"].shift(1)
+    # How long the *previous* target stood before this change. days_in_state on a
+    # change row is 1 by construction, so reporting it would say nothing.
+    change_positions = [pos[x] for x in idxs]
+    history = []
+    for n, (dt, row) in enumerate(changes.iterrows()):
+        if n == 0:
+            stood = change_positions[0] - 0
+        else:
+            stood = change_positions[n] - change_positions[n - 1]
+        history.append({
+            "date": dt,
+            "from": float(prev.loc[dt]) if pd.notna(prev.loc[dt]) else float(row["target"]),
+            "to": float(row["target"]),
+            "score": float(row["score"]),
+            "regime": row["regime_label"],
+            "held_days": int(stood),
+        })
+    payload.decision_history = list(reversed(history))[:12]
+    payload.total_changes = int(len(changes))
+
+    ref = reference_date or pd.Timestamp.utcnow().normalize().tz_localize(None)
+    payload.staleness_days = int((ref - d.index[-1]).days)
+
+    eb = payload.exposure_basis
+    if eb["basis"] == "total_equity":
+        payload.exposure_note = (
+            f"Your current exposure is measured as <strong>total equity risk</strong> — "
+            f"{eb['total_equity_pct']:.0f}% of net liquidation across {eb['n_positions']} single "
+            f"names — not as your {bench} position, which is {eb['benchmark_pct']:.0f}%. Those names "
+            f"carry substantially the same market risk the index does, so treating them as cash "
+            f"would invert the instruction. Act on this by trimming or adding across the whole book, "
+            f"or by hedging the difference — not by trading {bench} as though the rest were flat."
+        )
+    return payload
+
+
+def _baseline_reversal(enriched, scored, regime) -> float:
+    """Reversal rate with the whipsaw protections switched off, for comparison."""
+    from ..signals import AllocationPolicy, target_allocation
+
+    naive = AllocationPolicy(score_smoothing=1, cooldown_days=0,
+                             ladder_up=(48.0, 58.0, 68.0, 78.0),
+                             ladder_down=(47.9, 57.9, 67.9, 77.9))
+    a = target_allocation(enriched, scored, regime, naive).dropna(subset=["target"])
+    ch = a[a["changed"].fillna(False)]
+    if len(ch) < 2:
+        return 0.0
+    pos = {dt: i for i, dt in enumerate(a.index)}
+    idxs = list(ch.index)
+    dirs = np.sign(ch["target"].diff().fillna(0).to_numpy())
+    rev = sum(1 for i in range(len(idxs) - 1)
+              if pos[idxs[i + 1]] - pos[idxs[i]] <= 10 and dirs[i + 1] * dirs[i] < 0)
+    return 100.0 * rev / max(1, len(ch) - 1)
