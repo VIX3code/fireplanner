@@ -9,6 +9,7 @@ claim; the HTML being clean is.
 from __future__ import annotations
 
 import json
+import pathlib
 import re
 
 import pandas as pd
@@ -129,3 +130,19 @@ def test_fresh_pages_start_with_the_banner_hidden(payload, tmp_path):
     banner = text[text.index('id="stale-banner"'):]
     banner = banner[: banner.index(">") + 1]
     assert "hidden" in banner, banner
+
+
+def test_generated_pages_are_not_tracked_by_git():
+    """Rendered pages carry account-derived figures; they are published, not committed.
+
+    dashboard.html was ignored from the start and signal_desk.html was not —
+    an inconsistency that put position counts into four commits before it was
+    caught. This asserts the pair stays in step.
+    """
+    import subprocess
+
+    tracked = subprocess.run(
+        ["git", "ls-files", "signal_desk.html", "dashboard.html", "site"],
+        capture_output=True, text=True, cwd=pathlib.Path(__file__).resolve().parent.parent,
+    ).stdout.strip()
+    assert tracked == "", f"generated output is tracked in git: {tracked!r}"

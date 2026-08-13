@@ -8,7 +8,10 @@ dist/
 .venv/
 venv/
 .env
+# Generated pages — they render account-derived figures, so they are
+# artifacts to publish, never files to track.
 dashboard.html
+signal_desk.html
 *.parquet
 .DS_Store
 
