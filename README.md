@@ -394,10 +394,18 @@ The tests that matter most:
 - **Stop fills are asserted never better than the stop**, so a gap-down cannot be filled at a
   price the market never offered.
 
-### One data caveat worth knowing
+### Two data caveats worth knowing
 
-IBKR's SMART-aggregated daily bars occasionally report a close a cent or two outside the
-session's own high/low — the consolidated closing-auction print lands outside the range built
+**Partial bars.** IBKR returns today's half-formed daily bar while the market is open. Observed
+live: SPY's 2026-08-13 bar mid-session carried 5.9M shares against a 20–30M norm, with a "close"
+that was just the last print. Ingesting it silently corrupts every indicator downstream and can
+flip a signal that will read differently at 16:00. `drop_incomplete_last_bar` removes the final
+bar when its date is the current exchange-local date *and* the session has not yet closed — the
+live providers apply it automatically, historical bars are never touched.
+
+
+**Out-of-range closes.** IBKR's SMART-aggregated daily bars occasionally report a close a cent
+or two outside the session's own high/low — the consolidated closing-auction print lands outside the range built
 from the aggregated intraday feed. It affects ~1% of SPY sessions (2022-03-17: high 441.02,
 close 441.07). Left alone it corrupts true range, ATR stops, %B and Donchian breaks, so
 `normalize_bars` widens the bar to contain its own open and close. The repair never narrows a

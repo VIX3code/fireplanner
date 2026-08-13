@@ -388,3 +388,52 @@ def test_backtest_refuses_insufficient_history():
     )
     with pytest.raises(ValueError, match="history"):
         run_backtest(ind.enrich(short), symbol="X")
+
+
+# ---------------------------------------------------------------- partial bars
+
+def test_drops_a_session_still_in_progress():
+    """IBKR returns today's half-formed bar while the market is open."""
+    from fireplanner.data import drop_incomplete_last_bar
+
+    idx = pd.to_datetime(["2026-08-11", "2026-08-12", "2026-08-13"])
+    df = pd.DataFrame({"close": [770.56, 772.49, 776.13]}, index=idx)
+
+    mid_session = pd.Timestamp("2026-08-13 16:30", tz="UTC")   # 12:30 ET
+    kept = drop_incomplete_last_bar(df, now=mid_session)
+    assert len(kept) == 2
+    assert kept.index[-1].date().isoformat() == "2026-08-12"
+
+
+def test_keeps_the_bar_once_the_session_has_closed():
+    from fireplanner.data import drop_incomplete_last_bar
+
+    idx = pd.to_datetime(["2026-08-12", "2026-08-13"])
+    df = pd.DataFrame({"close": [772.49, 776.13]}, index=idx)
+    after_close = pd.Timestamp("2026-08-13 21:30", tz="UTC")   # 17:30 ET
+    assert len(drop_incomplete_last_bar(df, now=after_close)) == 2
+
+
+def test_never_touches_historical_bars():
+    from fireplanner.data import drop_incomplete_last_bar
+
+    idx = pd.to_datetime(["2026-08-11", "2026-08-12", "2026-08-13"])
+    df = pd.DataFrame({"close": [1.0, 2.0, 3.0]}, index=idx)
+    # a week later, nothing is in progress
+    later = pd.Timestamp("2026-08-20 16:30", tz="UTC")
+    assert len(drop_incomplete_last_bar(df, now=later)) == 3
+
+
+def test_naive_now_is_treated_as_utc():
+    from fireplanner.data import drop_incomplete_last_bar
+
+    idx = pd.to_datetime(["2026-08-12", "2026-08-13"])
+    df = pd.DataFrame({"close": [1.0, 2.0]}, index=idx)
+    assert len(drop_incomplete_last_bar(df, now=pd.Timestamp("2026-08-13 16:30"))) == 1
+
+
+def test_empty_frame_is_safe():
+    from fireplanner.data import drop_incomplete_last_bar
+
+    empty = pd.DataFrame({"close": []}, index=pd.to_datetime([]))
+    assert drop_incomplete_last_bar(empty).empty

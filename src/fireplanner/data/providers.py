@@ -24,7 +24,7 @@ from pathlib import Path
 
 import pandas as pd
 
-from .base import BarProvider, Contract, normalize_bars
+from .base import BarProvider, Contract, drop_incomplete_last_bar, normalize_bars
 
 __all__ = ["SnapshotProvider", "GatewayProvider", "WebApiProvider", "get_provider"]
 
@@ -192,7 +192,8 @@ class GatewayProvider:
         )
         if not bars:
             raise LookupError(f"IBKR returned no bars for {symbol!r}")
-        return normalize_bars(util.df(bars)).tail(lookback_days)
+        # Never hand back a session that is still forming.
+        return drop_incomplete_last_bar(normalize_bars(util.df(bars))).tail(lookback_days)
 
     # -- account ---------------------------------------------------------
     def positions(self) -> pd.DataFrame:
@@ -305,7 +306,7 @@ class WebApiProvider:
         )
         # CP returns epoch milliseconds.
         df["date"] = pd.to_datetime(df["date"], unit="ms")
-        return normalize_bars(df).tail(lookback_days)
+        return drop_incomplete_last_bar(normalize_bars(df)).tail(lookback_days)
 
     def positions(self, account_id: str | None = None) -> pd.DataFrame:
         self.tickle()

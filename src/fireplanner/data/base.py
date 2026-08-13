@@ -22,7 +22,14 @@ from typing import Protocol, runtime_checkable
 
 import pandas as pd
 
-__all__ = ["Bar", "Contract", "BarProvider", "normalize_bars", "OHLCV_COLUMNS"]
+__all__ = [
+    "Bar",
+    "Contract",
+    "BarProvider",
+    "normalize_bars",
+    "drop_incomplete_last_bar",
+    "OHLCV_COLUMNS",
+]
 
 OHLCV_COLUMNS = ["open", "high", "low", "close", "volume"]
 
@@ -117,3 +124,57 @@ def normalize_bars(df: pd.DataFrame) -> pd.DataFrame:
     out["high"] = out[["high", "open", "close"]].max(axis=1)
     out["low"] = out[["low", "open", "close"]].min(axis=1)
     return out
+
+
+def drop_incomplete_last_bar(
+    df: pd.DataFrame,
+    now: pd.Timestamp | None = None,
+    tz: str = "America/New_York",
+    close_hour: int = 16,
+    close_minute: int = 0,
+) -> pd.DataFrame:
+    """Drop a final bar that belongs to a session still in progress.
+
+    IBKR happily returns today's partially-formed daily bar while the market is
+    open. Ingesting it is silently wrong for a system that only ever acts on
+    completed sessions: the close is really "the price right now", the high and
+    low are partial, and the volume is a fraction of the day's. Every indicator
+    downstream — the moving averages, ATR, the score, the allocation target —
+    then reflects a bar that does not exist yet, and can flip a signal that will
+    read differently at 16:00.
+
+    Observed live: SPY's 2026-08-13 bar mid-session carried 5.9M shares against a
+    20-30M daily norm, and a "close" that was simply the last print.
+
+    The rule is deliberately conservative: drop the last bar only when its date
+    is the current exchange-local date *and* the session has not yet closed.
+    Historical bars are never touched, and after the close nothing is dropped.
+    """
+    if df.empty:
+        return df
+
+    try:
+        from zoneinfo import ZoneInfo
+    except ImportError:  # pragma: no cover - Python < 3.9
+        return df
+
+    zone = ZoneInfo(tz)
+    if now is None:
+        now_local = pd.Timestamp.now("UTC").tz_convert(zone)
+    else:
+        stamp = pd.Timestamp(now)
+        # A naive timestamp is taken as UTC; an aware one is converted.
+        stamp = stamp.tz_localize("UTC") if stamp.tzinfo is None else stamp
+        now_local = stamp.tz_convert(zone)
+
+    last_date = pd.Timestamp(df.index[-1]).date()
+    if last_date != now_local.date():
+        return df
+
+    session_close = now_local.replace(
+        hour=close_hour, minute=close_minute, second=0, microsecond=0
+    )
+    if now_local >= session_close:
+        return df
+
+    return df.iloc[:-1]
