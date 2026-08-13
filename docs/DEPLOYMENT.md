@@ -139,8 +139,13 @@ Every build writes `status.json` next to the pages:
 ```
 
 Point a check at it and alert when `generated_utc` falls behind — a silently stale signal is
-the failure mode that actually costs money. The pages also render their own staleness banner
-once the bars are more than four days old.
+the failure mode that actually costs money.
+
+The pages also police themselves. Each carries the date of its last bar and compares it to
+**the viewer's clock**, showing a warning banner once the bars are more than four days old
+(four absorbs a normal weekend). This is computed on open, not at build: staleness baked in at
+generation time would freeze — a page built today would report "1 day old" forever, including
+weeks later. No network is involved, so it works from `file://` and under the strict CSP.
 
 ## Operational reality check
 

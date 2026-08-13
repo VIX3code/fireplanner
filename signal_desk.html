@@ -198,6 +198,11 @@ details.tableview[open] summary { margin-bottom: 8px; }
 .verdict strong { color: var(--text-primary); }
 ul.notes { margin: 0; padding-left: 18px; font-size: 13px; color: var(--text-secondary); }
 
+.banner { padding: 10px 14px; border-radius: 8px; font-size: 13px; margin-bottom: 16px;
+          border: 1px solid var(--border); background: rgba(250,178,25,0.12);
+          color: var(--text-primary); }
+.banner[hidden] { display: none; }
+
 .page-foot { margin-top: 24px; padding-top: 16px; border-top: 1px solid var(--border); }
 .page-foot p { font-size: 11.5px; color: var(--muted); margin: 0; max-width: 80ch; }
 </style>
@@ -244,7 +249,7 @@ ul.notes { margin: 0; padding-left: 18px; font-size: 13px; color: var(--text-sec
        daily bars, decisions reviewed at the close</p>
   </div>
   <div class="asof"><span class="asof-label">Signal as of</span><span class="asof-date">2026-08-12</span></div>
-</header>
+</header><div class="banner banner-warning" id="stale-banner" data-bars-through="2026-08-12" hidden></div>
 <section class="card instruction instruction-warning">
   <span class="eyebrow">Today's instruction</span>
   <h2 class="headline">Hold — a change is pending</h2>
@@ -317,6 +322,31 @@ ul.notes { margin: 0; padding-left: 18px; font-size: 13px; color: var(--text-sec
      forecast, or investment advice, and backtested results are not a promise about future returns.</p>
 </footer></main>
 <script>
+// Staleness, judged when the page is read rather than when it was written.
+// A static page cannot otherwise know it has aged, and a signal that looks
+// current but is three weeks old is the failure mode that costs money.
+(function () {
+  var el = document.getElementById('stale-banner');
+  if (!el) return;
+  var through = el.getAttribute('data-bars-through');
+  if (!through) return;
+
+  // Anchor to ~21:00 UTC, roughly the US close on the bar's own date.
+  var barsAt = Date.parse(through + 'T21:00:00Z');
+  if (isNaN(barsAt)) return;
+
+  var days = Math.floor((Date.now() - barsAt) / 86400000);
+  // 4 calendar days absorbs a normal weekend (Friday bars read on Tuesday).
+  if (days > 4) {
+    el.textContent = 'These bars are ' + days + ' days old (through ' + through +
+      '). This page is a static snapshot and does not refresh itself — regenerate ' +
+      'before acting on it.';
+    el.hidden = false;
+  } else {
+    el.hidden = true;
+  }
+})();
+
 (function () {
   var COLORS = ['--series-1', '--series-2', '--series-3'];
   document.querySelectorAll('.chart-wrap').forEach(function (wrap) {

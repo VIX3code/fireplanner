@@ -130,13 +130,21 @@ def render_desk(p, title: str = "S&P 500 Signal Desk") -> str:
     sections: list[str] = []
 
     # ---------------------------------------------------------------- header
+    # Staleness has to be judged when the page is *read*, not when it was built.
+    # These pages are static files: one generated today shows "1 day old" forever,
+    # including three weeks later when the signal has moved on. The banner below
+    # is therefore filled in by the viewer's own clock; the build-time value is
+    # kept only as the no-JavaScript fallback.
     stale = p.staleness_days
-    stale_note = ""
-    if stale is not None and stale > 4:
-        stale_note = (
-            f'<div class="banner banner-warning">Bars are {stale} days old. '
-            f"Refresh before acting on this.</div>"
-        )
+    prebuilt = (
+        f"Bars are {stale} days old. Refresh before acting on this."
+        if stale is not None and stale > 4
+        else ""
+    )
+    stale_note = (
+        f'<div class="banner banner-warning" id="stale-banner" '
+        f'data-bars-through="{d["date"]}"{"" if prebuilt else " hidden"}>{prebuilt}</div>'
+    )
 
     sections.append(
         f"""

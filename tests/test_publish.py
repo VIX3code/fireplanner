@@ -100,3 +100,32 @@ def test_status_json_is_machine_readable(payload, tmp_path):
     assert 0.0 <= status["decision"]["target_pct"] <= 1.0
     # the field a monitor would alert on
     assert pd.Timestamp(status["generated_utc"]) is not pd.NaT
+
+
+# ---------------------------------------------------------------- staleness
+
+def test_pages_carry_a_view_time_staleness_banner(payload, tmp_path):
+    """A static page must be able to tell the reader it has gone stale.
+
+    Staleness computed at build time is frozen into the file: a page generated
+    today reports "1 day old" forever, including weeks later when the signal has
+    moved on. The banner is therefore filled in from the viewer's own clock.
+    """
+    publish_site(payload, out_dir=tmp_path / "site")
+    for name in ("signal_desk.html", "dashboard.html"):
+        text = (tmp_path / "site" / name).read_text()
+        assert 'id="stale-banner"' in text, name
+        # the bar date is baked in for the client to compare against
+        assert f'data-bars-through="{payload.as_of}"' in text, name
+        # and the script that does the comparison ships with it
+        assert "does not refresh itself" in text, name
+        # no network required to work it out
+        assert "fetch(" not in text, name
+
+
+def test_fresh_pages_start_with_the_banner_hidden(payload, tmp_path):
+    publish_site(payload, out_dir=tmp_path / "site")
+    text = (tmp_path / "site" / "signal_desk.html").read_text()
+    banner = text[text.index('id="stale-banner"'):]
+    banner = banner[: banner.index(">") + 1]
+    assert "hidden" in banner, banner
