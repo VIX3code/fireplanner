@@ -25,6 +25,7 @@ universe:
   benchmark: SPY
   vol_symbol: VIX             # CBOE index — needs exchange=CBOE, not SMART
   breadth_symbol: RSP         # equal-weight S&P, the participation proxy
+  term_symbol: VIX3M          # 3-month VIX — curve shape and fast re-entry
   watchlist:
     - SPY
     - NVDA
@@ -38,6 +39,11 @@ regime:
     vol: 0.25
     breadth: 0.20
     drawdown: 0.15
+    # VIX3M/VIX is contrarian (backwardation is bullish) and predicts forward
+    # returns monotonically -- but weighting it INSIDE the trend gate measured
+    # strictly worse (Sharpe 1.18 -> 0.96 -> 0.69). It pays as a re-entry
+    # trigger instead. Raise this only if you re-measure it.
+    term: 0.00
   vix_calm: 16.0
   vix_stress: 25.0
   # score -> maximum fraction of equity deployable
@@ -81,6 +87,14 @@ backtest:
   exit_score: 45.0
   exit_on_sma50_break: true
   exit_on_supertrend_flip: true
+  # Permanent, never-sold allocation. 0.0 is a pure tactical book, which on the
+  # shipped sample captured 0 of SPY's 20 best days. 0.4 captures all 20 and
+  # still beats buy-and-hold on Sharpe and drawdown.
+  core_weight: 0.00
+  # Re-enter at a lower score once the VIX curve un-inverts: best days cluster
+  # within days of worst days, so a slow re-entry guarantees you miss them.
+  fast_reentry: true
+  reentry_score: 45.0
   # Single-instrument tests override max_position_pct: that 10% cap is a
   # diversification rule, and applying it here would leave 90% in cash and make
   # the buy-and-hold comparison meaningless.

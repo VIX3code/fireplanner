@@ -183,6 +183,21 @@ def render_html(p, title: str = "FirePlanner") -> str:
                 sparkline(e["rvol20"].tail(120), color_role="series-3"),
             )
         )
+        if reg is not None and "term_ratio" in reg.columns and reg["term_ratio"].notna().any():
+            tr = reg["term_ratio"].dropna()
+            tr_now = float(tr.iloc[-1])
+            inverted = tr_now < 1.0
+            tiles.append(
+                _tile(
+                    "VIX3M / VIX",
+                    fmt(tr_now, 3),
+                    "backwardated — panic, historically near a low"
+                    if inverted
+                    else ("steep contango — calm, no fear premium" if tr_now > 1.15 else "mild contango"),
+                    sparkline(tr.tail(120), color_role="series-3"),
+                    status="serious" if inverted else "good",
+                )
+            )
         tiles.append(
             _tile(
                 "Supertrend",
@@ -474,6 +489,143 @@ def render_html(p, title: str = "FirePlanner") -> str:
   </div>
   {_details_table("Trade log — last 15",
       ["Entry", "Exit", "In", "Out", "Return", "Days", "Reason"], trows) if trows else ""}
+</section>"""
+        )
+
+    # ---------------------------------------------------------------- best days
+    if p.variants and p.best_days:
+        bd = p.best_days
+        chart = line_chart(
+            [
+                Series(v["name"], v["equity"], role, 2.0 if i == 0 else 1.5)
+                for i, (v, role) in enumerate(
+                    zip(p.variants, ["series-1", "series-2", "series-3", "series-1", "series-2"])
+                )
+                if v["name"] in {"Tactical only", "+ 40% core", "Buy & hold"}
+            ],
+            chart_id="variants",
+            y_digits=0,
+            height=250,
+        )
+        vrows = []
+        for v in p.variants:
+            s, b = v["stats"], v["best_days"]
+            vrows.append(
+                [
+                    f"<strong>{html.escape(v['name'])}</strong>",
+                    fmt(s.get("cagr_pct"), 2) + "%",
+                    fmt(s.get("vol_pct"), 2) + "%",
+                    f"<strong>{fmt(s.get('sharpe'), 2)}</strong>",
+                    fmt(s.get("max_drawdown_pct"), 2) + "%",
+                    f"{b['best_captured']}/{b['n']}",
+                    f"{b['worst_avoided']}/{b['n']}",
+                    _sign(-b["best_forgone_pct"], 1),
+                ]
+            )
+        sections.append(
+            f"""
+<section class="card">
+  <h2>The cost of being out — and how to cut it</h2>
+  <p class="lede">Any rule that goes to cash risks missing the market's best sessions. That risk is
+     measurable, so here it is measured rather than worried about.</p>
+
+  <div class="grid-2 tight">
+    <div class="verdict">
+      <h3>Why a defensive filter misses them</h3>
+      <ul>
+        <li>The purely tactical rule captured <strong>{bd['best_captured']} of the
+            {bd['n']} best days</strong> and avoided <strong>{bd['worst_avoided']} of the
+            {bd['n']} worst</strong>. It forgoes <strong>{fmt(bd['best_forgone_pct'], 1)}%</strong>
+            of upside to dodge <strong>{fmt(bd['worst_avoided_pct'], 1)}%</strong> of downside — it
+            trades one tail for the other almost exactly, then pays costs and sits in cash.</li>
+        <li><strong>The best days hide in the wreckage.</strong>
+            {fmt(bd['best_pct_below_sma'], 0)}% of them happened below the 200-day average, against
+            {fmt(bd['baseline_pct_below_sma'], 0)}% of all sessions. Average drawdown on a best day:
+            {fmt(bd['best_mean_drawdown'], 1)}% versus {fmt(bd['baseline_mean_drawdown'], 1)}%
+            typically. They occur precisely where a defensive gate refuses to hold.</li>
+        <li><strong>They sit next to the worst days.</strong>
+            {bd['best_adjacent_to_worst']} of the {bd['n']} best fell within five sessions of a
+            bottom-{bd['n']} day. You cannot dodge one tail without standing near the other.</li>
+      </ul>
+    </div>
+    <div class="verdict">
+      <h3>What actually fixes it</h3>
+      <ul>
+        <li><strong>Hold a permanent core.</strong> The only structural fix. A core is exposed to
+            every up day by construction, so best-day capture goes to
+            {p.variants[2]['best_days']['best_captured']}/{bd['n']} and the forgone return to zero.
+            The tactical sleeve then adds and removes risk <em>around</em> it instead of switching
+            the whole book off.</li>
+        <li><strong>Re-enter faster than you exit.</strong> Waiting for the 50-day to be reclaimed
+            guarantees you are flat through the rebound. The VIX curve un-inverting is the earliest
+            defensible trigger, and it improved max drawdown without costing Sharpe.</li>
+        <li><strong>Do not read the vol curve backwards.</strong> Backwardation feels like the moment
+            to de-risk and is historically the opposite — see the term-structure note below.</li>
+      </ul>
+    </div>
+  </div>
+
+  {chart}
+  {_table(
+      ["Configuration", "CAGR", "Vol", "Sharpe", "Max DD", "Best days", "Worst dodged", "Upside forgone"],
+      vrows, "data wide")}
+  <p class="lede" style="margin-top:12px">Every core variant beats buy-and-hold on both Sharpe and
+     drawdown while giving up CAGR in proportion to how much it holds. There is no free lunch in
+     this table — only an explicit choice about where on the frontier you want to sit.</p>
+</section>"""
+        )
+
+    # ---------------------------------------------------------------- term structure
+    if reg is not None and "term_ratio" in reg.columns and reg["term_ratio"].notna().any():
+        twin = reg.dropna(subset=["term_ratio"]).tail(504)
+        chart = line_chart(
+            [Series("VIX3M / VIX", twin["term_ratio"], "series-3", 2.0)],
+            chart_id="term",
+            y_digits=2,
+            height=200,
+            bands=[(0.0, 1.0, "status-serious")],
+        )
+        rows = [
+            [d.strftime("%Y-%m-%d"), fmt(r["term_ratio"], 3),
+             "backwardated" if r["term_ratio"] < 1 else "contango"]
+            for d, r in twin.tail(12).iterrows()
+        ]
+        sections.append(
+            f"""
+<section class="card">
+  <h2>VIX term structure</h2>
+  <p class="lede">VIX3M against spot VIX. Above 1.0 the curve is in contango — the ordinary calm
+     state. In the shaded band below 1.0 it is <em>backwardated</em>: traders are paying more for
+     protection now than in three months. That is what acute panic looks like, and it does not last.</p>
+  {chart}
+  <div class="grid-2 tight">
+    <div>
+      {_table(["VIX3M/VIX", "Forward 21d SPY", "Sessions"], [
+        ["&lt; 0.95 &nbsp;<span class='muted-txt'>deep backwardation</span>", "<strong class='pos'>+6.70%</strong>", "15"],
+        ["0.95 – 1.00 &nbsp;<span class='muted-txt'>backwardation</span>", "<span class='pos'>+3.82%</span>", "50"],
+        ["1.00 – 1.05 &nbsp;<span class='muted-txt'>flat</span>", "+2.17%", "185"],
+        ["1.05 – 1.10", "+1.03%", "223"],
+        ["1.10 – 1.15", "+0.87%", "283"],
+        ["&gt; 1.15 &nbsp;<span class='muted-txt'>steep contango</span>", "+0.10%", "476"],
+      ], "data")}
+    </div>
+    <div class="verdict">
+      <h3>Why it is not in the gate score</h3>
+      <ul>
+        <li>The relationship above is <strong>monotonic across all six buckets</strong> — a real
+            signal, measured on your own five years of IBKR bars.</li>
+        <li>But giving it weight <em>inside the regime gate</em> made the model
+            <strong>monotonically worse</strong>: Sharpe fell 1.18 → 0.96 → 0.69 as it was added.
+            The gate authorizes trend-following entries; term structure is a mean-reversion signal
+            that peaks when trend structure is at its worst. Blending them dilutes both and buys
+            entries into downtrends that stop out.</li>
+        <li>So its weight defaults to <strong>zero in the score</strong>, and it earns its keep as
+            the <strong>fast re-entry trigger</strong> instead — the job it is actually good at.
+            Right signal, right place.</li>
+      </ul>
+    </div>
+  </div>
+  {_details_table("Table view — last 12 sessions", ["Date", "VIX3M/VIX", "State"], rows)}
 </section>"""
         )
 

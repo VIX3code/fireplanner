@@ -28,6 +28,7 @@ __all__ = [
     "trend_state",
     "breadth_ratio",
     "vol_state",
+    "term_structure",
     "compute_regime",
     "relative_strength",
     "universe_breadth",
@@ -110,6 +111,63 @@ def vol_state(vix: pd.Series, lookback: int = 252, calm: float = 16.0, stress: f
     )
 
 
+def term_structure(
+    vix: pd.Series,
+    vix3m: pd.Series,
+    backwardation: float = 1.00,
+    steep_contango: float = 1.15,
+) -> pd.DataFrame:
+    """VIX3M / VIX — the shape of the volatility curve.
+
+    Above 1.0 the curve is in **contango**: three-month vol costs more than
+    spot, the ordinary state of a calm market. Below 1.0 it is **backwardated**:
+    traders are paying up for immediate protection. That is what acute panic
+    looks like, and it does not persist — it is the shape of a bottom far more
+    often than the shape of a top.
+
+    The sign here is deliberately inverted relative to the VIX level, and it is
+    measured rather than assumed. Bucketing forward SPY returns by this ratio
+    over the shipped five-year sample gives a cleanly monotonic relationship::
+
+        VIX3M/VIX          fwd 21d mean    n
+        < 0.95                  +6.70%    15
+        0.95 - 1.00             +3.82%    50
+        1.00 - 1.05             +2.17%   185
+        1.05 - 1.10             +1.03%   223
+        1.10 - 1.15             +0.87%   283
+        > 1.15                  +0.10%   476
+
+    So ``score`` is *high* when the curve is backwardated. In the composite it
+    acts as a counterweight that stops the gate from turning maximally bearish
+    at precisely the moment forward returns are best — which is the single
+    biggest reason a regime filter misses the market's best days.
+
+    Reading this backwards — treating backwardation as a reason to de-risk —
+    would make the model measurably worse.
+    """
+    v3m = vix3m.reindex(vix.index).ffill()
+    ratio = v3m / vix.replace(0.0, np.nan)
+
+    # 1.0 at full backwardation, decaying to 0.0 in steep contango.
+    score = ((steep_contango - ratio) / (steep_contango - backwardation)).clip(0.0, 1.0)
+
+    inverted = (ratio < 1.0).astype(float)
+    # "The panic is passing" — backwardated within the last 10 sessions but no
+    # longer. Historically the earliest defensible point to add risk back.
+    normalizing = ((inverted.rolling(10, min_periods=1).max() > 0) & (ratio >= 1.0)).astype(float)
+
+    return pd.DataFrame(
+        {
+            "vix3m": v3m,
+            "ratio": ratio,
+            "ratio_ma5": ratio.rolling(5, min_periods=1).mean(),
+            "backwardated": inverted.where(ratio.notna()),
+            "normalizing": normalizing.where(ratio.notna()),
+            "score": score,
+        }
+    )
+
+
 # --------------------------------------------------------------------------
 # composite
 # --------------------------------------------------------------------------
@@ -136,7 +194,28 @@ class RegimeReading:
 
 
 #: Weight of each component in the composite regime score.
-REGIME_WEIGHTS = {"trend": 0.40, "breadth": 0.20, "vol": 0.25, "drawdown": 0.15}
+#:
+#: **``term`` defaults to zero on purpose, and that is a measured result rather
+#: than an oversight.** The VIX3M/VIX curve has clean, monotonic predictive power
+#: over forward returns (see :func:`term_structure`), but giving it weight *inside
+#: the gate* made the model monotonically worse on the shipped sample::
+#:
+#:     regime weights                      CAGR    Sharpe   maxDD   trades
+#:     trend .40 breadth .20 (no term)     2.02%    1.18    -1.57%      14
+#:     trend .35 breadth .15 (no term)     1.72%    0.96    -2.07%      16
+#:     trend .35 breadth .15 term .10      1.09%    0.69    -2.42%      12
+#:
+#: The reason is a job mismatch, not a bad signal. The gate exists to authorize
+#: *trend-following* entries; term structure is a *mean-reversion* signal that
+#: peaks when trend structure is at its worst. Blending them dilutes the trend
+#: and vol components that make the gate work and buys entries into downtrends
+#: that then stop out.
+#:
+#: So term structure is computed, published on the dashboard, and used where it
+#: does pay — as the fast re-entry trigger in the backtester
+#: (``BacktestConfig.fast_reentry``), which improved max drawdown from -1.57% to
+#: -1.21% at unchanged Sharpe. Raise this weight only if you re-measure it.
+REGIME_WEIGHTS = {"trend": 0.40, "breadth": 0.20, "vol": 0.25, "drawdown": 0.15, "term": 0.00}
 
 #: Regime score -> (label, maximum fraction of equity deployable).
 REGIME_BANDS = [
@@ -152,6 +231,7 @@ def compute_regime(
     index_close: pd.Series,
     vix: pd.Series | None = None,
     equal_weight: pd.Series | None = None,
+    vix3m: pd.Series | None = None,
     weights: dict | None = None,
 ) -> pd.DataFrame:
     """Blend the components into a daily regime score, label, and exposure cap.
@@ -172,6 +252,13 @@ def compute_regime(
     if equal_weight is not None:
         breadth_df = breadth_ratio(equal_weight.reindex(index_close.index).ffill(), index_close)
         parts["breadth"] = breadth_df["score"]
+
+    term_df = None
+    if vix is not None and vix3m is not None:
+        term_df = term_structure(
+            vix.reindex(index_close.index).ffill(), vix3m.reindex(index_close.index).ffill()
+        )
+        parts["term"] = term_df["score"]
 
     dd = drawdown(index_close)
     # Full credit at highs, zero credit at -20% or worse.
@@ -197,6 +284,12 @@ def compute_regime(
     if breadth_df is not None:
         out["breadth_ratio"] = breadth_df["ratio"]
         out["breadth_ratio_ma"] = breadth_df["ratio_ma"]
+    if term_df is not None:
+        out["vix3m"] = term_df["vix3m"]
+        out["term_ratio"] = term_df["ratio"]
+        out["backwardated"] = term_df["backwardated"]
+        # Consumed by the backtester's fast re-entry rule.
+        out["term_normalizing"] = term_df["normalizing"]
 
     return out
 

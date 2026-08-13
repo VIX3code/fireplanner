@@ -85,7 +85,7 @@ non-intraday system needs. Live quotes may return delayed or empty without one.
 A **trend-following system with a pullback entry filter, gated by market regime**. Not a
 predictor. Two independent decisions:
 
-**The gate** decides *how much you may risk*, from four components on the index:
+**The gate** decides *how much you may risk*, from four weighted components on the index:
 
 | Component | Weight | Reads |
 |---|---|---|
@@ -93,6 +93,7 @@ predictor. Two independent decisions:
 | Volatility | 25% | VIX level and its own trailing percentile |
 | Participation | 20% | equal-weight (RSP) vs cap-weight (SPY) — is the advance broad? |
 | Drawdown | 15% | distance below the 52-week closing high |
+| Term structure | **0%** | VIX3M/VIX curve shape — computed, but see below |
 
 Score → label → a hard cap on deployable equity: Risk-On 100%, Constructive 75%, Neutral 50%,
 Defensive 25%, Risk-Off 0%.
@@ -117,6 +118,83 @@ and `limited_by` tells you which one bound.
 
 ---
 
+## VIX term structure, and why its gate weight is zero
+
+`VIX3M / VIX` is the shape of the volatility curve. Above 1.0 is **contango** (calm); below 1.0 is
+**backwardation** — traders paying more for protection now than in three months, which is what acute
+panic looks like. Bucketing forward SPY returns by it over the shipped five years is cleanly
+monotonic:
+
+| VIX3M/VIX | Forward 21d SPY | Sessions |
+|---|---|---|
+| < 0.95 *(deep backwardation)* | **+6.70%** | 15 |
+| 0.95 – 1.00 | +3.82% | 50 |
+| 1.00 – 1.05 | +2.17% | 185 |
+| 1.05 – 1.10 | +1.03% | 223 |
+| 1.10 – 1.15 | +0.87% | 283 |
+| > 1.15 *(steep contango)* | +0.10% | 476 |
+
+Note the sign: **backwardation is bullish**, not bearish. It marks the bottom far more often than
+the top, and reading it the intuitive way round would make the model worse.
+
+So it is a real signal. But giving it weight *inside the gate* degraded the model monotonically:
+
+| Regime weights | CAGR | Sharpe | Max DD |
+|---|---|---|---|
+| trend .40 / breadth .20, no term | 2.02% | **1.18** | −1.57% |
+| trend .35 / breadth .15, no term | 1.72% | 0.96 | −2.07% |
+| trend .35 / breadth .15 / term .10 | 1.09% | 0.69 | −2.42% |
+
+That is a job mismatch, not a bad signal. The gate authorizes *trend-following* entries; term
+structure is a *mean-reversion* signal that peaks when trend structure is at its worst. Blending
+them dilutes the components that make the gate work and buys entries into downtrends that stop out.
+
+**So `term` is weighted 0 in the score by default and earns its keep as the fast re-entry trigger**
+(`BacktestConfig.fast_reentry`), where it improved max drawdown from −1.57% to −1.21% at unchanged
+Sharpe. Right signal, right place. Raise `REGIME_WEIGHTS["term"]` only if you re-measure it.
+
+---
+
+## Missing the best days — the measured cost, and the fix
+
+A rule that goes to cash risks missing the market's best sessions. On the shipped sample the purely
+tactical rule captured **0 of SPY's 20 best days** while avoiding **20 of 20 worst** — forgoing
+**+64.4%** of upside to dodge **−63.8%** of downside. It swaps one tail for the other almost exactly,
+then pays costs and sits in cash. That is the whole mechanism behind its underperformance.
+
+The best days hide where a defensive filter refuses to hold:
+
+- **75%** of the top-20 days happened below the 200-day average, against 22% of all sessions.
+- Average drawdown on a best day was **−15.0%**, versus −6.3% typically.
+- **11 of the 20** best days fell within five sessions of a bottom-20 day.
+
+You cannot dodge one tail without standing next to the other. What actually works:
+
+| Configuration | CAGR | Vol | Sharpe | Max DD | Best days | Upside forgone |
+|---|---|---|---|---|---|---|
+| Tactical only | 2.02% | 1.71% | **1.18** | −1.57% | 0/20 | −64.4% |
+| + term re-entry | 2.09% | 1.78% | **1.18** | −1.21% | 0/20 | −64.4% |
+| + 40% core | 9.20% | 7.97% | 1.15 | −9.39% | **20/20** | 0.0% |
+| + 60% core | 12.32% | 11.13% | 1.10 | −12.81% | **20/20** | 0.0% |
+| Buy & hold | 16.08% | 16.73% | 0.98 | −19.00% | 20/20 | 0.0% |
+
+1. **Hold a permanent core** (`--core-weight 0.4`). The only structural fix — a core is exposed to
+   every up day by construction, so best-day capture goes to 20/20 and forgone return to zero. The
+   tactical sleeve then adds and removes risk *around* it instead of switching the book off.
+2. **Re-enter faster than you exit** (`fast_reentry`, on by default). Waiting for the 50-day to be
+   reclaimed guarantees you are flat through the rebound.
+3. **Don't read the vol curve backwards** — see the section above.
+
+Every core variant beats buy-and-hold on **both** Sharpe and drawdown while giving up CAGR in
+proportion to how much it holds. There is no free lunch in that table, only an explicit choice about
+where on the frontier you want to sit.
+
+```bash
+fireplanner backtest SPY --core-weight 0.4    # prints best/worst day capture too
+```
+
+---
+
 ## Honest results
 
 `fireplanner backtest SPY`, five years of IBKR daily bars, signals on the close, fills at the
@@ -132,7 +210,9 @@ next open, gap-aware stops, commission and slippage charged both ways:
 
 **Read that honestly.** The model does **not** beat owning the index. It holds 31% of the time
 and risks 0.75% per trade, so it captures roughly its time-in-market share of the move. The low
-volatility is mostly an artifact of being in cash, not skill.
+volatility is mostly an artifact of being in cash, not skill — and as the section above shows, that
+cash position is exactly what costs it the best days. If you want this to be a primary allocation
+rather than a hedge overlay, run it with `--core-weight 0.4` or higher.
 
 The edge that *is* real is risk-adjusted: levered to buy-and-hold's volatility the strategy
 compounds at **20.1% vs 16.1%** with a **−14.6% vs −19.0%** drawdown. But that leverage costs
@@ -211,10 +291,10 @@ range and is bounded by the discrepancy.
 
 - **Real breadth.** `universe_breadth()` takes a wide frame of closes and returns % above 50/200-day.
   Feed it actual S&P 500 constituents rather than the RSP/SPY proxy.
-- **VIX term structure.** `VIX3M / VIX` is a well-known risk switch; the CBOE conid is `47511905`
-  and `vol_state()` is the place to blend it in.
 - **Order staging.** `GatewayProvider` connects `readonly=True`. Bracket orders from
   `PositionPlan` (entry + ATR stop + R-multiple targets) are the natural next step.
+- **Core rebalancing.** The core is currently bought once and held. A quarterly rebalance back to
+  target weight would be more realistic, and would let the tactical sleeve harvest into strength.
 
 ---
 

@@ -43,6 +43,8 @@ def fmt(v, digits: int = 2, suffix: str = "") -> str:
         return html.escape(str(v))
     if np.isnan(f) or np.isinf(f):
         return "—"
+    if f == 0.0:
+        f = 0.0  # collapse negative zero, so a rounded-away value never reads "-0.0"
     return f"{f:,.{digits}f}{suffix}"
 
 
@@ -86,7 +88,14 @@ def line_chart(
     if not series:
         return '<div class="chart-empty">no data</div>'
 
-    pad_l, pad_r, pad_t, pad_b = 54, 88, 14, 26
+    # Right padding has to fit the longest end label, or the series name gets
+    # clipped by the viewBox. Approximate the 11px label at ~6.1px per character.
+    label_chars = max(
+        (len(s.name) + 3 + y_digits + len(y_suffix) + 6 for s in series if s.label_end),
+        default=0,
+    )
+    pad_l, pad_t, pad_b = 54, 14, 26
+    pad_r = int(min(max(24, label_chars * 6.1 + 14), width * 0.36))
     plot_w = width - pad_l - pad_r
     plot_h = height - pad_t - pad_b
 

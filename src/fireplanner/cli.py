@@ -38,17 +38,19 @@ def _provider(args):
 
 def _regime(provider, args):
     bench = provider.history(args.benchmark, lookback_days=args.lookback)
-    vix = breadth = None
-    for sym, name in [(args.vol_symbol, "vix"), (args.breadth_symbol, "breadth")]:
+    series = {}
+    for key, sym in [("vix", args.vol_symbol), ("breadth", args.breadth_symbol), ("vix3m", args.term_symbol)]:
         try:
-            s = provider.history(sym, lookback_days=args.lookback)["close"]
-            if name == "vix":
-                vix = s
-            else:
-                breadth = s
+            series[key] = provider.history(sym, lookback_days=args.lookback)["close"]
         except Exception:
             print(f"  (note: {sym} unavailable)", file=sys.stderr)
-    return bench, ind.compute_regime(bench["close"], vix=vix, equal_weight=breadth)
+    regime = ind.compute_regime(
+        bench["close"],
+        vix=series.get("vix"),
+        equal_weight=series.get("breadth"),
+        vix3m=series.get("vix3m"),
+    )
+    return bench, regime
 
 
 def cmd_regime(args) -> int:
@@ -135,16 +137,28 @@ def cmd_plan(args) -> int:
 
 
 def cmd_backtest(args) -> int:
+    from .backtest import BacktestConfig, best_days_analysis
+
     provider = _provider(args)
     _, regime = _regime(provider, args)
     bars = provider.history(args.symbol, lookback_days=args.lookback)
     e = ind.enrich(bars)
-    result = run_backtest(e, regime=regime["score"], symbol=args.symbol)
+    reentry = regime["term_normalizing"] if "term_normalizing" in regime.columns else None
+    cfg = BacktestConfig(core_weight=args.core_weight)
+    result = run_backtest(e, regime=regime["score"], symbol=args.symbol, cfg=cfg, reentry_signal=reentry)
     bh = buy_and_hold_stats(bars["close"].reindex(result.equity_curve.index).dropna())
 
-    print(f"\n  {args.symbol} — regime-gated swing model")
+    label = f"core {args.core_weight * 100:.0f}% + tactical" if args.core_weight else "tactical only"
+    print(f"\n  {args.symbol} — regime-gated swing model ({label})")
     print(f"  {'-' * 52}")
     print(result.summary())
+
+    bd = best_days_analysis(bars["close"], result.daily["in_market"])
+    print(f"\n  best/worst day capture")
+    print(f"    best {bd['n']} days held    {bd['best_captured']}/{bd['n']}"
+          f"   upside forgone {bd['best_forgone_pct']:+.1f}%")
+    print(f"    worst {bd['n']} days dodged {bd['worst_avoided']}/{bd['n']}"
+          f"   downside avoided {bd['worst_avoided_pct']:+.1f}%")
     print(f"\n  buy & hold, same window")
     print(f"    CAGR {bh['cagr_pct']:.2f}%   vol {bh['vol_pct']:.2f}%   "
           f"Sharpe {bh['sharpe']:.2f}   maxDD {bh['max_drawdown_pct']:.2f}%\n")
@@ -188,6 +202,7 @@ def main(argv=None) -> int:
     ap.add_argument("--benchmark", default="SPY")
     ap.add_argument("--vol-symbol", default="VIX")
     ap.add_argument("--breadth-symbol", default="RSP")
+    ap.add_argument("--term-symbol", default="VIX3M", help="3-month VIX, for curve shape and fast re-entry")
     ap.add_argument("--lookback", type=int, default=1260)
 
     sub = ap.add_subparsers(dest="cmd", required=True)
@@ -209,6 +224,8 @@ def main(argv=None) -> int:
     s = sub.add_parser("backtest", help="strategy vs buy-and-hold")
     s.add_argument("symbol")
     s.add_argument("--trades", action="store_true")
+    s.add_argument("--core-weight", type=float, default=0.0,
+                   help="fraction held permanently and never sold (0.4 is a reasonable start)")
     s.set_defaults(func=cmd_backtest)
 
     s = sub.add_parser("dashboard", help="render the HTML dashboard")

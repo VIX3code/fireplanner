@@ -29,6 +29,7 @@ def regime(provider, spy):
         spy["close"],
         vix=provider.history("VIX")["close"],
         equal_weight=provider.history("RSP")["close"],
+        vix3m=provider.history("VIX3M")["close"],
     )
 
 
@@ -250,6 +251,134 @@ def test_costs_reduce_returns(spy, regime):
     costly = run_backtest(e, regime=regime["score"], symbol="SPY",
                           cfg=BacktestConfig(commission_per_share=0.02, min_commission=1.0, slippage_bps=25.0))
     assert costly.equity_curve.iloc[-1] < free.equity_curve.iloc[-1]
+
+
+# ---------------------------------------------------------------- term structure
+
+@pytest.fixture(scope="module")
+def vix3m(provider):
+    return provider.history("VIX3M")["close"]
+
+
+def test_term_structure_ratio_and_flags(provider, vix3m):
+    vix = provider.history("VIX")["close"]
+    ts = ind.term_structure(vix, vix3m)
+    ratio = ts["ratio"].dropna()
+    assert (ratio > 0).all()
+    # backwardated iff the ratio is under 1
+    assert ((ts["ratio"] < 1.0) == (ts["backwardated"] > 0)).where(ratio.notna()).dropna().all()
+    assert ts["score"].dropna().between(0, 1).all()
+
+
+def test_term_score_is_contrarian():
+    """Backwardation must score HIGH — reading it backwards degrades the model."""
+    idx = pd.date_range("2024-01-01", periods=3, freq="B")
+    vix = pd.Series([20.0, 20.0, 20.0], index=idx)
+    v3m = pd.Series([17.0, 21.0, 25.0], index=idx)  # 0.85 backwardated -> 1.25 steep contango
+    ts = ind.term_structure(vix, v3m)
+    assert ts["score"].iloc[0] == pytest.approx(1.0)
+    assert ts["score"].iloc[2] == pytest.approx(0.0)
+    assert ts["score"].is_monotonic_decreasing
+
+
+def test_normalizing_flag_fires_after_inversion_clears():
+    idx = pd.date_range("2024-01-01", periods=6, freq="B")
+    vix = pd.Series([20.0] * 6, index=idx)
+    # inverted for two sessions, then back into contango
+    v3m = pd.Series([19.0, 19.0, 21.0, 21.0, 21.0, 21.0], index=idx)
+    ts = ind.term_structure(vix, v3m)
+    assert ts["normalizing"].iloc[0] == 0.0   # still inverted
+    assert ts["normalizing"].iloc[2] == 1.0   # just cleared
+    assert ts["normalizing"].iloc[5] == 1.0   # still inside the 10-day window
+
+
+def test_term_weight_defaults_to_zero_so_the_gate_is_unchanged(spy, provider, vix3m):
+    """Adding VIX3M must not silently move the gate — it is weighted 0 by default."""
+    vix = provider.history("VIX")["close"]
+    rsp = provider.history("RSP")["close"]
+    without = ind.compute_regime(spy["close"], vix=vix, equal_weight=rsp)
+    with_term = ind.compute_regime(spy["close"], vix=vix, equal_weight=rsp, vix3m=vix3m)
+    a, b = without["score"].dropna(), with_term["score"].dropna()
+    shared = a.index.intersection(b.index)
+    assert np.allclose(a[shared], b[shared], atol=1e-12)
+    # but the diagnostic columns are now available
+    assert {"term_ratio", "backwardated", "term_normalizing"} <= set(with_term.columns)
+
+
+def test_term_weight_can_be_enabled_explicitly(spy, provider, vix3m):
+    vix = provider.history("VIX")["close"]
+    weighted = ind.compute_regime(
+        spy["close"], vix=vix, vix3m=vix3m,
+        weights={"trend": 0.5, "vol": 0.3, "drawdown": 0.1, "term": 0.1},
+    )
+    plain = ind.compute_regime(
+        spy["close"], vix=vix, weights={"trend": 0.5, "vol": 0.3, "drawdown": 0.1},
+    )
+    a, b = weighted["score"].dropna(), plain["score"].dropna()
+    shared = a.index.intersection(b.index)
+    assert not np.allclose(a[shared], b[shared], atol=1e-6)
+
+
+# ---------------------------------------------------------------- core sleeve
+
+def test_core_weight_captures_every_best_day(spy, regime):
+    from fireplanner.backtest import best_days_analysis
+
+    e = ind.enrich(spy)
+    tactical = run_backtest(e, regime=regime["score"], symbol="SPY", cfg=BacktestConfig())
+    cored = run_backtest(e, regime=regime["score"], symbol="SPY", cfg=BacktestConfig(core_weight=0.5))
+
+    bd_t = best_days_analysis(spy["close"], tactical.daily["in_market"])
+    bd_c = best_days_analysis(spy["close"], cored.daily["in_market"])
+    # the whole point: a permanent core is exposed to every up day
+    assert bd_c["best_captured"] == bd_c["n"]
+    assert bd_t["best_captured"] < bd_c["best_captured"]
+    assert bd_c["best_forgone_pct"] == pytest.approx(0.0)
+
+
+def test_core_is_never_sold(spy, regime):
+    """No trade in the log may account for the core — it is bought once and held."""
+    e = ind.enrich(spy)
+    r = run_backtest(e, regime=regime["score"], symbol="SPY", cfg=BacktestConfig(core_weight=0.5))
+    # equity never drops to pure cash: the core is always marked to market
+    assert (r.daily["in_market"] > 0).all()
+    assert r.equity_curve.iloc[-1] > 0
+
+
+def test_core_weight_raises_return_and_drawdown_together(spy, regime):
+    """The frontier has no free lunch — more core means more of both."""
+    e = ind.enrich(spy)
+    results = {
+        w: run_backtest(e, regime=regime["score"], symbol="SPY", cfg=BacktestConfig(core_weight=w))
+        for w in (0.0, 0.4, 0.6)
+    }
+    cagrs = [results[w].stats["cagr_pct"] for w in (0.0, 0.4, 0.6)]
+    dds = [results[w].stats["max_drawdown_pct"] for w in (0.0, 0.4, 0.6)]
+    assert cagrs[0] < cagrs[1] < cagrs[2]
+    assert dds[0] > dds[1] > dds[2]  # drawdowns are negative, so deeper as core grows
+
+
+def test_fast_reentry_increases_participation(spy, regime):
+    e = ind.enrich(spy)
+    signal = regime["term_normalizing"]
+    slow = run_backtest(e, regime=regime["score"], symbol="SPY", cfg=BacktestConfig(fast_reentry=False))
+    fast = run_backtest(e, regime=regime["score"], symbol="SPY",
+                        cfg=BacktestConfig(fast_reentry=True), reentry_signal=signal)
+    assert fast.stats["trades"] > slow.stats["trades"]
+    assert fast.stats["exposure_pct"] >= slow.stats["exposure_pct"]
+
+
+def test_best_days_analysis_accounting():
+    from fireplanner.backtest import best_days_analysis
+
+    idx = pd.date_range("2024-01-01", periods=8, freq="B")
+    close = pd.Series([100, 110, 99, 108, 100, 101, 102, 103], index=idx, dtype=float)
+    held = pd.Series([0, 0, 1, 1, 1, 1, 1, 1], index=idx, dtype=float)
+    bd = best_days_analysis(close, held, n=2)
+    assert 0 <= bd["best_captured"] <= 2
+    assert 0 <= bd["worst_avoided"] <= 2
+    # captured + forgone must reconstruct the total, with no double counting
+    assert bd["best_captured_pct"] + bd["best_forgone_pct"] == pytest.approx(bd["best_total_pct"])
 
 
 def test_backtest_refuses_insufficient_history():

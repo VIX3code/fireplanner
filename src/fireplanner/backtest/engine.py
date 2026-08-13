@@ -52,6 +52,22 @@ class BacktestConfig:
     #: Minimum sessions to hold before a score-based exit may fire (0 = none).
     min_hold_days: int = 0
     allow_reentry_same_day: bool = False
+    #: Fraction of equity held permanently in the asset and never sold.
+    #:
+    #: This is the direct answer to "a filter that goes to cash misses the best
+    #: days". Measured on the shipped sample, the tactical rule alone captured
+    #: **0 of SPY's 20 best sessions** (+64.4% of return forgone) while avoiding
+    #: 20 of 20 worst — it swaps one tail for the other almost exactly, then pays
+    #: costs. A permanent core participates in every up day; the tactical sleeve
+    #: adds and removes risk around it. Set 0.0 for a pure tactical book.
+    core_weight: float = 0.0
+    #: Allow re-entry at a lower score when the vol curve says the panic is passing.
+    #:
+    #: Exits should be fast and re-entries faster: best days cluster within days
+    #: of worst days (45% of the top 20 fell within a week of a bottom-20 day),
+    #: so waiting for the 50-day to be reclaimed guarantees you miss them.
+    fast_reentry: bool = True
+    reentry_score: float = 45.0
     #: Cap on this position as a fraction of equity.
     #:
     #: This intentionally overrides ``RiskConfig.max_position_pct``. That 10% cap
@@ -100,8 +116,14 @@ def run_backtest(
     signal_cfg: SignalConfig | None = None,
     risk_cfg: RiskConfig | None = None,
     symbol: str = "ASSET",
+    reentry_signal: pd.Series | None = None,
 ) -> BacktestResult:
-    """Run the model over an enriched OHLCV frame."""
+    """Run the model over an enriched OHLCV frame.
+
+    ``reentry_signal`` is an optional boolean series (typically the regime's
+    ``term_normalizing`` column) that unlocks the lower ``reentry_score``
+    threshold when ``cfg.fast_reentry`` is set.
+    """
     cfg = cfg or BacktestConfig()
     risk_cfg = risk_cfg or RiskConfig()
 
@@ -130,8 +152,14 @@ def run_backtest(
     )
 
     n = len(enriched)
+    if reentry_signal is not None:
+        reentry = reentry_signal.reindex(enriched.index).fillna(0).to_numpy(float) > 0
+    else:
+        reentry = np.zeros(n, dtype=bool)
+
     cash = cfg.initial_equity
     shares = 0.0
+    core_shares = 0.0
     entry_price = stop = high_water = 0.0
     entry_date = None
     entry_bar = -1
@@ -142,6 +170,13 @@ def run_backtest(
     stop_track = np.full(n, np.nan)
     trades: list[dict] = []
 
+    # Buy the permanent core once, at the first tradeable open, and never sell it.
+    if cfg.core_weight > 0:
+        core_fill = op[start_idx] * (1 + cfg.slippage_bps / 1e4)
+        core_shares = float(np.floor(cfg.initial_equity * cfg.core_weight / core_fill))
+        if core_shares > 0:
+            cash -= core_shares * core_fill + _commission(core_shares, cfg)
+
     for i in range(start_idx, n):
         # ---- 1. execute anything decided on the previous close -----------
         if pending is not None:
@@ -151,11 +186,14 @@ def run_backtest(
             if action == "ENTER" and shares == 0:
                 per_share_risk = risk_cfg.atr_stop_mult * atr[i - 1]
                 if per_share_risk > 0:
-                    equity_now = cash
+                    # Risk is measured against the whole account, but the tactical
+                    # sleeve can only ever deploy the cash the core left behind.
+                    equity_now = cash + core_shares * cl[i - 1]
                     budget = equity_now * risk_cfg.risk_pct
                     qty = budget / per_share_risk
                     cap_qty = (equity_now * cfg.position_cap_pct * min(1.0, exposure_cap[i - 1])) / fill
-                    qty = float(np.floor(min(qty, cap_qty)))
+                    cap_cash = cash / fill
+                    qty = float(np.floor(min(qty, cap_qty, cap_cash)))
                     if qty > 0 and qty * fill >= risk_cfg.min_notional:
                         fee = _commission(qty, cfg)
                         cash -= qty * fill + fee
@@ -218,8 +256,9 @@ def run_backtest(
             entry_bar = -1
 
         # ---- 3. mark to market -------------------------------------------
-        equity[i] = cash + shares * cl[i]
-        position_flag[i] = 1.0 if shares > 0 else 0.0
+        equity[i] = cash + (shares + core_shares) * cl[i]
+        # "In market" means exposed to the asset at all — the core counts.
+        position_flag[i] = 1.0 if (shares > 0 or core_shares > 0) else 0.0
         stop_track[i] = stop if shares > 0 else np.nan
 
         # ---- 4. decide for tomorrow's open -------------------------------
@@ -238,7 +277,12 @@ def run_backtest(
             if reason:
                 pending = ("EXIT", reason)
         else:
-            if score[i] >= cfg.entry_score and exposure_cap[i] > 0:
+            threshold = cfg.entry_score
+            if cfg.fast_reentry and reentry[i]:
+                # The vol curve has un-inverted: take the lower bar so the sleeve
+                # is back on before the trend indicators have finished rebuilding.
+                threshold = min(threshold, cfg.reentry_score)
+            if score[i] >= threshold and exposure_cap[i] > 0:
                 pending = ("ENTER", "signal")
 
     # ---- close any open position at the final close -----------------------
@@ -260,7 +304,8 @@ def run_backtest(
                 "reason": "end_of_data",
             }
         )
-        equity[n - 1] = cash
+        # The core is never sold — it stays marked to the final close.
+        equity[n - 1] = cash + core_shares * fill
 
     eq = pd.Series(equity, index=dates, name="equity").dropna()
     daily = pd.DataFrame(

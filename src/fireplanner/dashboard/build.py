@@ -12,7 +12,7 @@ import numpy as np
 import pandas as pd
 
 from .. import indicators as ind
-from ..backtest import buy_and_hold_stats, run_backtest
+from ..backtest import BacktestConfig, best_days_analysis, buy_and_hold_stats, run_backtest
 from ..risk import RiskConfig, plan_position
 from ..signals import latest_signal, score_frame
 
@@ -34,6 +34,8 @@ class DashboardPayload:
     backtest: dict = field(default_factory=dict)
     quotes: dict = field(default_factory=dict)
     notes: list = field(default_factory=list)
+    variants: list = field(default_factory=list)
+    best_days: dict = field(default_factory=dict)
 
 
 def build_payload(
@@ -41,6 +43,7 @@ def build_payload(
     benchmark: str = "SPY",
     vol_symbol: str = "VIX",
     breadth_symbol: str = "RSP",
+    term_symbol: str = "VIX3M",
     watchlist: list[str] | None = None,
     lookback_days: int = 1260,
     equity: float | None = None,
@@ -62,7 +65,13 @@ def build_payload(
     except Exception:
         notes.append(f"{breadth_symbol} unavailable — regime computed without the breadth component.")
 
-    regime = ind.compute_regime(bench_bars["close"], vix=vix, equal_weight=breadth)
+    vix3m = None
+    try:
+        vix3m = provider.history(term_symbol, lookback_days=lookback_days)["close"]
+    except Exception:
+        notes.append(f"{term_symbol} unavailable — no term-structure panel or fast re-entry.")
+
+    regime = ind.compute_regime(bench_bars["close"], vix=vix, equal_weight=breadth, vix3m=vix3m)
     regime_now = ind.latest_regime(regime).as_dict()
 
     # ---- account ---------------------------------------------------------
@@ -138,11 +147,46 @@ def build_payload(
             notes.append(f"{benchmark} sizing skipped: {exc}")
 
     # ---- backtest evidence ----------------------------------------------
-    backtest = {}
+    backtest, variants, best_days = {}, [], {}
     if benchmark in enriched_map:
-        result = run_backtest(enriched_map[benchmark], regime=regime["score"], symbol=benchmark)
+        e_bench = enriched_map[benchmark]
+        reentry = regime["term_normalizing"] if "term_normalizing" in regime.columns else None
+        result = run_backtest(e_bench, regime=regime["score"], symbol=benchmark, reentry_signal=reentry)
         bh_curve = bench_bars["close"].reindex(result.equity_curve.index)
         bh = buy_and_hold_stats(bh_curve.dropna())
+
+        # The efficient frontier between "always in" and "purely tactical".
+        # This is the answer to how much of the best days a rule gives up, and
+        # what a permanent core buys back.
+        specs = [
+            ("Tactical only", BacktestConfig(fast_reentry=False)),
+            ("+ term re-entry", BacktestConfig(fast_reentry=True)),
+            ("+ 40% core", BacktestConfig(core_weight=0.40, fast_reentry=True)),
+            ("+ 60% core", BacktestConfig(core_weight=0.60, fast_reentry=True)),
+        ]
+        for name, spec in specs:
+            v = run_backtest(e_bench, regime=regime["score"], symbol=benchmark, cfg=spec,
+                             reentry_signal=reentry if spec.fast_reentry else None)
+            bd = best_days_analysis(bench_bars["close"], v.daily["in_market"])
+            variants.append({
+                "name": name,
+                "core_weight": spec.core_weight,
+                "stats": v.stats,
+                "best_days": bd,
+                "equity": 100.0 * v.equity_curve / v.equity_curve.iloc[0],
+            })
+        variants.append({
+            "name": "Buy & hold",
+            "core_weight": 1.0,
+            "stats": bh,
+            "best_days": best_days_analysis(
+                bench_bars["close"],
+                pd.Series(1.0, index=result.equity_curve.index),
+            ),
+            "equity": 100.0 * bh_curve / bh_curve.iloc[0],
+        })
+        best_days = variants[0]["best_days"]
+
         backtest = {
             "stats": result.stats,
             "buy_hold": bh,
@@ -170,4 +214,6 @@ def build_payload(
         backtest=backtest,
         quotes=quotes,
         notes=notes,
+        variants=variants,
+        best_days=best_days,
     )

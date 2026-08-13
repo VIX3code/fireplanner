@@ -39,6 +39,7 @@ from .regime import (
     compute_regime,
     latest_regime,
     relative_strength,
+    term_structure,
     trend_state,
     universe_breadth,
     vol_state,
@@ -50,8 +51,8 @@ __all__ = [
     "realized_vol", "rma", "roc", "rolling_percentile", "rsi", "slope", "sma",
     "stochastic", "supertrend", "true_range", "zscore",
     "REGIME_BANDS", "REGIME_WEIGHTS", "RegimeReading", "breadth_ratio",
-    "compute_regime", "latest_regime", "relative_strength", "trend_state",
-    "universe_breadth", "vol_state",
+    "compute_regime", "latest_regime", "relative_strength", "term_structure",
+    "trend_state", "universe_breadth", "vol_state",
     "enrich",
 ]
 

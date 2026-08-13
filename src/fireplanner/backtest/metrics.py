@@ -5,7 +5,7 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 
-__all__ = ["compute_stats", "drawdown_series", "buy_and_hold_stats"]
+__all__ = ["compute_stats", "drawdown_series", "buy_and_hold_stats", "best_days_analysis"]
 
 TRADING_DAYS = 252
 
@@ -91,6 +91,61 @@ def compute_stats(
         stats["trades"] = 0
 
     return stats
+
+
+def best_days_analysis(
+    close: pd.Series,
+    in_market: pd.Series,
+    n: int = 20,
+    sma_len: int = 200,
+) -> dict:
+    """How much of the market's best and worst days a strategy actually saw.
+
+    This is the diagnostic for the "missing the ten best days destroys your
+    return" problem, and it is worth running on any rule that goes to cash. The
+    uncomfortable part is *where* those days live: they cluster inside
+    drawdowns, in exactly the tape a defensive filter refuses to hold.
+
+    Returns capture counts, the return forgone, and the conditions the best days
+    occurred in — so the cost is a measured number rather than a worry.
+    """
+    ret = close.pct_change() * 100.0
+    idx = in_market.index.intersection(ret.index)
+    ret = ret.reindex(idx).dropna()
+    flag = in_market.reindex(ret.index).fillna(0) > 0
+
+    best = ret.nlargest(n)
+    worst = ret.nsmallest(n)
+    best_held = flag.reindex(best.index)
+    worst_held = flag.reindex(worst.index)
+
+    below = close.reindex(ret.index) < close.rolling(sma_len, min_periods=sma_len).mean().reindex(ret.index)
+    dd = (close / close.cummax() - 1.0).reindex(ret.index) * 100.0
+
+    # How often is a best day within a week of a worst day?
+    worst_set = set(worst.index)
+    positions = {d: i for i, d in enumerate(ret.index)}
+    adjacent = sum(
+        1
+        for d in best.index
+        if worst_set & set(ret.index[max(0, positions[d] - 5) : positions[d] + 6])
+    )
+
+    return {
+        "n": n,
+        "best_captured": int(best_held.sum()),
+        "worst_avoided": int((~worst_held).sum()),
+        "best_total_pct": float(best.sum()),
+        "best_captured_pct": float(best[best_held].sum()),
+        "best_forgone_pct": float(best[~best_held].sum()),
+        "worst_total_pct": float(worst.sum()),
+        "worst_avoided_pct": float(worst[~worst_held].sum()),
+        "best_pct_below_sma": 100.0 * float(below.reindex(best.index).mean()),
+        "baseline_pct_below_sma": 100.0 * float(below.mean()),
+        "best_mean_drawdown": float(dd.reindex(best.index).mean()),
+        "baseline_mean_drawdown": float(dd.mean()),
+        "best_adjacent_to_worst": adjacent,
+    }
 
 
 def buy_and_hold_stats(close: pd.Series, initial_equity: float = 100_000.0) -> dict:
