@@ -262,10 +262,14 @@ def cmd_publish(args) -> int:
     )
     payload = add_decision(payload, policy=AllocationPolicy(core_weight=args.core,
                                                             sleeve_max=1.0 - args.core))
-    manifest = publish_site(payload, out_dir=args.output, redact=args.redact)
-    print(f"\n  wrote {manifest['out_dir']}/  (redacted: {manifest['redacted']})")
+    manifest = publish_site(payload, out_dir=args.output, redact=args.redact,
+                            single=args.single)
+    shape = "one page" if manifest["single"] else "three files"
+    print(f"\n  wrote {manifest['out_dir']}/  ({shape}, redacted: {manifest['redacted']})")
     for name, size in manifest["files"].items():
         print(f"    {name:20s} {size:>9,} bytes")
+    for name in manifest["removed"]:
+        print(f"    {name:20s} {'removed':>9s}  (stale from the previous layout)")
     d = payload.decision
     print(f"\n  signal: {d['action']}  target {d['target_pct'] * 100:.0f}%  as of {d['date']}\n")
     return 0
@@ -362,6 +366,9 @@ def main(argv=None) -> int:
     s.add_argument("--core", type=float, default=0.40)
     s.add_argument("--redact", action="store_true",
                    help="strip balances, positions and trade sizes - required for public hosting")
+    s.add_argument("--single", action="store_true",
+                   help="write one index.html holding both pages behind a tab strip, "
+                        "instead of three linked files")
     s.set_defaults(func=cmd_publish)
 
     s = sub.add_parser("dashboard", help="render the HTML dashboard")

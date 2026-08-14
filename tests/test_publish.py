@@ -27,16 +27,6 @@ def payload():
     return add_decision(p, reference_date=pd.Timestamp("2026-08-13"))
 
 
-@pytest.fixture(scope="module")
-def account_secrets(payload):
-    """Every figure that must never reach a published page."""
-    summary = payload.account["summary"]
-    secrets = [f"{int(summary['net_liquidation']):,}", f"{int(summary['gross_position_value']):,}"]
-    if payload.positions is not None:
-        secrets += [str(s) for s in payload.positions["symbol"].head(8)]
-    return secrets
-
-
 def test_publish_writes_the_expected_files(payload, tmp_path):
     manifest = publish_site(payload, out_dir=tmp_path / "site")
     for name in ("index.html", "signal_desk.html", "dashboard.html", "status.json"):
@@ -66,12 +56,18 @@ def test_redacted_pages_leak_no_account_figures(payload, account_secrets, tmp_pa
 
 
 def test_unredacted_build_does_contain_them(payload, account_secrets, tmp_path):
-    """Guard against the test above passing because the data was never there."""
+    """Guard against the test above passing because the data was never there.
+
+    ``all``, not ``any``: with ``any`` a single matching ticker keeps this green
+    while every currency figure in the list is one the renderer never emits, and
+    the redaction test above quietly stops checking the numbers.
+    """
     publish_site(payload, out_dir=tmp_path / "priv", redact=False)
     blob = "".join(
         (tmp_path / "priv" / n).read_text() for n in ("signal_desk.html", "dashboard.html")
     )
-    assert any(s in blob for s in account_secrets), "fixture is not exercising real account data"
+    missing = [s for s in account_secrets if s not in blob]
+    assert not missing, f"these are not real account figures, so redacting them proves nothing: {missing}"
 
 
 def test_redaction_keeps_the_signal_intact(payload):

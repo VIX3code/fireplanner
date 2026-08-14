@@ -48,6 +48,16 @@ say "installing fireplanner[gateway,cache]"
 "$VENV/bin/python" -m pip install --quiet -e "$REPO[gateway,cache]"
 say "installed  $("$VENV/bin/fireplanner" --help >/dev/null 2>&1 && echo ok || echo FAILED)"
 
+# ---- config ---------------------------------------------------------------
+# Seeded once and never overwritten, so re-running install.sh cannot clobber a
+# deploy target you have already set.
+if [ ! -f "$HERE/fireplanner.env" ] && [ -f "$HERE/fireplanner.env.example" ]; then
+  sed -e "s|^IB_PORT=.*|IB_PORT=$IB_PORT|" "$HERE/fireplanner.env.example" > "$HERE/fireplanner.env"
+  say "config    $HERE/fireplanner.env  (created — edit to publish to a domain)"
+else
+  say "config    $HERE/fireplanner.env  (left as is)"
+fi
+
 # ---- launchd --------------------------------------------------------------
 mkdir -p "$HOME/Library/LaunchAgents"
 sed -e "s|__SCRIPT__|$HERE/run_fireplanner.sh|g" \
@@ -70,7 +80,11 @@ cat <<TXT
     2. Test it now, without waiting for the schedule:
          launchctl kickstart -p gui/$UID/$LABEL
        then watch:  tail -f $HERE/fireplanner.log
-    3. Open the pages:  open $HERE/fireplanner_site/index.html
+    3. Open the page:  open $HERE/fireplanner_site/index.html
+
+  To publish to your own domain, set FIREPLANNER_RSYNC_TARGET (or
+  FIREPLANNER_PUBLISH_CMD) in $HERE/fireplanner.env. Setting either one turns
+  redaction on by default, so no balances or position sizes leave this machine.
 
   To remove:  launchctl bootout gui/$UID/$LABEL && rm $PLIST_DST
 TXT

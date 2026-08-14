@@ -19,7 +19,7 @@ fireplanner scan SPY NVDA ZS MP FTNT                 # score a watchlist
 fireplanner plan SPY --equity 77674                  # size a position
 fireplanner backtest SPY --core-weight 0.4           # strategy vs buy-and-hold
 fireplanner dashboard SPY NVDA ZS -o dashboard.html  # the full analysis page
-fireplanner publish --redact -o site                 # static site, safe to host
+fireplanner publish SPY --single --redact -o site    # both pages in one file, safe to host
 fireplanner notify                                   # Telegram, only when it changes
 ```
 
@@ -27,6 +27,10 @@ Two pages, deliberately separate. **`desk`** answers *what should I do today* �
 instruction, the reasoning, the levels that would change it. **`dashboard`** answers *what is the
 market doing* — the full indicator and evidence view. Reach for the desk daily and the dashboard
 when you want to argue with it.
+
+For hosting, `publish --single` merges them into one `index.html` behind a tab strip: one URL
+to bookmark, one file to upload, and it opens on the decision. Drop `--single` for the
+three-file layout with a landing page.
 
 Every command runs out of the box against committed snapshots — real IBKR pulls frozen on
 2026-08-13 — so you can evaluate the whole thing before connecting a broker. Add
@@ -345,19 +349,24 @@ with **zero external requests**, so they host anywhere. The shape that works is 
 ```
 
 ```bash
-fireplanner publish --redact -o site     # percentages and prices only
-rsync -av --delete site/ user@host:/var/www/fireplanner/
+fireplanner publish SPY --single --redact -o site    # one file, percentages and prices only
+rsync -az --delete site/ user@host:/var/www/fireplanner/
 ```
 
 **Always `--redact` for anything anyone else can reach.** Unredacted pages publish your net
 liquidation, every position and your trade sizes. Redaction strips all of it while keeping the
 targets, prices and regime, so the signal survives and the balance sheet does not —
-`tests/test_publish.py` asserts on the rendered bytes that no account figure leaks.
+`tests/test_publish.py` asserts on the rendered bytes that no account figure leaks, and a
+companion test asserts the unredacted build *does* carry them, so the guard cannot pass
+vacuously.
 
 `deploy/macos/` ships a launchd job for a Mac that already runs TWS — own virtualenv, own
-label, stages each build and only swaps it in on success. `deploy/` also ships a Docker Compose stack (IB Gateway + generator + Caddy with TLS and auth, with
-the gateway on an internal-only network and no published ports), systemd unit and timer for a
-bare-metal box, and a Caddyfile with three auth options. Full guide, including the
+label, stages each build and only swaps it in on success, and rsyncs the result to your domain
+if you set a target in `fireplanner.env`. Setting a deploy target turns redaction on by
+default, because a page published with your balance sheet in it cannot be un-published.
+`deploy/` also ships a Docker Compose stack (IB Gateway + generator + Caddy with TLS and auth,
+with the gateway on an internal-only network and no published ports), systemd unit and timer
+for a bare-metal box, and a Caddyfile with three auth options. Full guide, including the
 market-data redistribution caveat: **[docs/DEPLOYMENT.md](docs/DEPLOYMENT.md)**.
 
 ---
@@ -376,15 +385,20 @@ src/fireplanner/
   risk/          sizing.py  ATR sizing, portfolio heat, vol targeting
   backtest/      engine.py  daily engine, next-open fills, gap-aware stops
                  metrics.py CAGR/Sharpe/Sortino/Calmar/drawdown + buy-and-hold benchmark
-  dashboard/     build.py, render.py, charts.py
-tests/           37 tests
+  dashboard/     build.py   assemble the payload both pages render from
+                 desk.py    the decision page — what to do today
+                 render.py  the analysis page — what the market is doing
+                 single.py  both of the above as one file, behind a tab strip
+                 charts.py  inline-SVG chart primitives, no chart library
+  publish.py     static site output + redaction of every account figure
+tests/           121 tests
 data/snapshots/  real IBKR pulls: SPY, VIX, RSP, NVDA, ZS, MP, FTNT + account state
 ```
 
 ## Correctness
 
 ```bash
-PYTHONPATH=src python3 -m pytest tests/ -q      # 37 passed
+PYTHONPATH=src python3 -m pytest tests/ -q      # 121 passed
 ```
 
 The tests that matter most:

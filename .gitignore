@@ -18,6 +18,11 @@ signal_desk.html
 # Live account state (balances, positions) — never commit
 data/snapshots/account.json
 
-# deployment secrets
+# deployment secrets and machine-local state
 deploy/.env
+deploy/macos/fireplanner.env
+deploy/macos/fireplanner-venv/
+deploy/macos/fireplanner_site/
+deploy/macos/*.log
+deploy/macos/fireplanner.launchd.*
 site/

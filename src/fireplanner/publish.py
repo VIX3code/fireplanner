@@ -10,6 +10,11 @@ positions and your trade sizes. That is fine on a laptop and a bad idea on a
 domain. ``redact_payload`` strips every absolute currency figure while keeping
 everything expressed as a percentage, so the signal survives and the balance
 sheet does not.
+
+``single=True`` collapses the whole thing into one ``index.html`` — both pages
+behind a tab strip, no navigation between files. For a domain that is the more
+useful shape: one URL to bookmark, one file to upload, and nothing that can be
+half-updated because the second file failed to copy.
 """
 
 from __future__ import annotations
@@ -136,41 +141,62 @@ def publish_site(
     out_dir: str | Path = "site",
     redact: bool = False,
     title_prefix: str = "",
+    single: bool = False,
 ) -> dict:
-    """Write ``index.html``, ``signal_desk.html`` and ``dashboard.html`` to ``out_dir``.
+    """Write the site to ``out_dir``.
+
+    ``single=False`` writes the three-file site: a landing page linking the
+    signal desk and the analysis dashboard. ``single=True`` writes one
+    ``index.html`` holding both, switched by a tab strip — one file, one URL,
+    which is what hosting on a domain actually wants.
 
     Returns a manifest of what was written, which is convenient for a deploy
     script to log or diff.
     """
-    from .dashboard import render_desk, render_html
+    from .dashboard import render_desk, render_html, render_single
 
     out = Path(out_dir)
     out.mkdir(parents=True, exist_ok=True)
 
     source = redact_payload(payload) if redact else payload
-
     written = {}
-    desk_html = render_desk(source, title=f"{title_prefix}S&P 500 Signal Desk".strip())
-    (out / "signal_desk.html").write_text(desk_html)
-    written["signal_desk.html"] = len(desk_html)
+    removed = []
 
-    dash_html = render_html(source, title=f"{title_prefix}FirePlanner Swing Desk".strip())
-    (out / "dashboard.html").write_text(dash_html)
-    written["dashboard.html"] = len(dash_html)
+    if single:
+        page = render_single(source, title=f"{title_prefix}S&P 500 Signal Desk".strip())
+        (out / "index.html").write_text(page)
+        written["index.html"] = len(page)
+        # Sweep the three-file layout if this directory used to hold it. Left in
+        # place they would keep resolving on the domain and keep serving whatever
+        # signal was current the day the layout changed — a page that is wrong
+        # but reachable is worse than one that 404s.
+        for stale in ("signal_desk.html", "dashboard.html"):
+            if (out / stale).exists():
+                (out / stale).unlink()
+                removed.append(stale)
+    else:
+        desk_html = render_desk(source, title=f"{title_prefix}S&P 500 Signal Desk".strip())
+        (out / "signal_desk.html").write_text(desk_html)
+        written["signal_desk.html"] = len(desk_html)
 
-    index = INDEX_TEMPLATE.format(
-        generated=pd.Timestamp.now('UTC').strftime("%Y-%m-%d %H:%M UTC"),
-        as_of=payload.as_of,
-        redaction=" · account figures redacted" if redact else "",
-    )
-    (out / "index.html").write_text(index)
-    written["index.html"] = len(index)
+        dash_html = render_html(source, title=f"{title_prefix}FirePlanner Swing Desk".strip())
+        (out / "dashboard.html").write_text(dash_html)
+        written["dashboard.html"] = len(dash_html)
+
+        index = INDEX_TEMPLATE.format(
+            generated=pd.Timestamp.now('UTC').strftime("%Y-%m-%d %H:%M UTC"),
+            as_of=payload.as_of,
+            redaction=" · account figures redacted" if redact else "",
+        )
+        (out / "index.html").write_text(index)
+        written["index.html"] = len(index)
 
     # A tiny machine-readable summary, handy for alerting or a status endpoint.
     summary = {
         "as_of": payload.as_of,
         "generated_utc": pd.Timestamp.now('UTC').isoformat(),
         "redacted": redact,
+        "single_page": single,
         "decision": {
             k: v for k, v in (source.decision or {}).items()
             if k in {"date", "action", "target_pct", "previous_pct", "regime_label", "score"}
@@ -180,4 +206,7 @@ def publish_site(
     (out / "status.json").write_text(json.dumps(summary, indent=2, default=str))
     written["status.json"] = len(json.dumps(summary))
 
-    return {"out_dir": str(out), "redacted": redact, "files": written}
+    return {
+        "out_dir": str(out), "redacted": redact, "single": single,
+        "files": written, "removed": removed,
+    }

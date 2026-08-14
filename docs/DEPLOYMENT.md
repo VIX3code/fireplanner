@@ -39,6 +39,45 @@ inline SVG, inline JS, zero external requests, no server-side code. Verified: 0 
 references in either page. So tier two can be Caddy, nginx, S3+CloudFront, GitHub Pages,
 Netlify — anything that serves files.
 
+## One file or three?
+
+`publish` has two layouts. They contain the same analysis; they differ in how it is split.
+
+| | Three files (default) | One file (`--single`) |
+|---|---|---|
+| What you get | `index.html` landing page linking `signal_desk.html` and `dashboard.html` | one `index.html` holding both, behind a tab strip |
+| Size | 85 KB + 315 KB | 389 KB (110 KB gzipped) |
+| Best for | reading on a desk, two tabs open | **a domain** — one URL, one upload, nothing half-updated |
+
+**`signal_desk.html` answers "what do I do today."** One instruction at the top — buy, sell,
+hold, or wait — the allocation ladder showing where the target sits, three pass/fail checks
+explaining why, the exact levels that would change it, and how often the signal has been
+wrong. It is deliberately narrow. Roughly 6 sections.
+
+**`dashboard.html` answers "what is the market doing."** The regime gate and its four
+components, ten indicator tiles, price against its trend anchors, the watchlist scorecard,
+your book, the backtest evidence, the best/worst-day analysis, and the VIX term structure.
+Roughly 10 sections and most of the file size, because every chart embeds its own data.
+
+The combined page keeps both, opens on the decision, and switches without a page load:
+
+```bash
+fireplanner publish SPY --single --redact -o site
+```
+
+Things the merge has to get right, all asserted in `tests/test_single_page.py`:
+
+- **One staleness banner.** The script that ages the page looks it up by element id; two
+  copies and only the first would ever update.
+- **Unique chart handles.** Tooltips resolve `#<id>-hit` globally — a collision would wire
+  one chart's crosshair to another chart's numbers.
+- **Readable with JavaScript off.** The tab strip is progressive enhancement: no script, no
+  hiding, and the document simply reads top to bottom. Same on a printout.
+- **Deep links.** `…/index.html#analysis` opens straight to the analysis half.
+
+Switching layouts deletes the files the other layout wrote. Left behind they would keep
+resolving on your domain, serving whatever signal was current the day you switched.
+
 ## Before you point a domain at it: two real risks
 
 **1. The pages contain your balance sheet.** Unredacted, they publish net liquidation, every
@@ -125,11 +164,45 @@ The runner is written for unattended operation, which mostly means refusing to d
   page is worse than an old one.
 - **It checks the gateway is actually listening first.** Otherwise the failure is a
   30-second timeout buried in a stack trace.
+- **It never uploads a failed build.** The upload step runs only after a build that
+  succeeded, so a bad run cannot replace a good page on your host.
 - **It always exits 0.** A closed market or a sleeping gateway is not an error worth having
   launchd retry.
 
+### Pushing it to your own domain
+
+`install.sh` seeds `deploy/macos/fireplanner.env` (gitignored, never overwritten on
+re-install). The runner sources it every run, so edits take effect immediately — no plist
+regeneration, no `launchctl` reload.
+
+```bash
+# deploy/macos/fireplanner.env
+IB_PORT=4001
+FIREPLANNER_SINGLE=1
+FIREPLANNER_RSYNC_TARGET="me@myhost.com:/var/www/fireplanner/"   # trailing slash matters
+```
+
+That is the whole domain setup. After each close the Mac rebuilds the page and rsyncs it up;
+`--delete` keeps the host from accumulating files the build no longer produces.
+
+**Setting a deploy target turns redaction on by default.** The pages otherwise carry your net
+liquidation, your positions and your trade sizes, and a page published with those in it cannot
+be un-published. `FIREPLANNER_REDACT=0` overrides it and the runner logs a warning every run.
+
+For anything that is not rsync, `FIREPLANNER_PUBLISH_CMD` receives the build directory as `$1`:
+
+```bash
+FIREPLANNER_PUBLISH_CMD='aws s3 sync "$1" s3://my-bucket/ --delete'
+FIREPLANNER_PUBLISH_CMD='npx --yes wrangler pages deploy "$1" --project-name fireplanner'
+```
+
+One macOS-specific trap: a launchd job has no terminal, so an SSH key with a passphrase will
+hang rather than prompt. The runner passes `BatchMode=yes` so it fails fast and logs instead.
+Use a passphrase-less deploy key, or add the key to the login keychain (`ssh-add
+--apple-use-keychain ~/.ssh/id_ed25519`) with `UseKeychain yes` in `~/.ssh/config`.
+
 Everything lands next to the scripts: `fireplanner.log`, `fireplanner_site/`,
-`fireplanner-venv/`. To remove it:
+`fireplanner-venv/`, `fireplanner.env`. To remove it:
 
 ```bash
 launchctl bootout gui/$UID/com.fireplanner.publish
@@ -163,12 +236,14 @@ from the broker and writes one directory.
 The simplest thing that works, and a good default if you already have a laptop that runs TWS:
 
 ```bash
-fireplanner publish --redact -o site
-rsync -av --delete site/ user@host:/var/www/fireplanner/
+fireplanner publish SPY --single --redact -o site
+rsync -az --delete site/ user@host:/var/www/fireplanner/
 # or: aws s3 sync site/ s3://your-bucket/ --delete
 ```
 
-Nothing about the output needs a runtime, so this is as robust as a static site gets.
+That is two files — `index.html` and `status.json` — and neither needs a runtime, so this is
+as robust as a static site gets. Drop `--single` if you would rather have the three-file
+layout with a landing page.
 
 ---
 
