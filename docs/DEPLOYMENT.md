@@ -147,6 +147,39 @@ The pages also police themselves. Each carries the date of its last bar and comp
 generation time would freeze — a page built today would report "1 day old" forever, including
 weeks later. No network is involved, so it works from `file://` and under the strict CSP.
 
+## Telegram alerts
+
+IBKR's own alerts only reach email or IBKR Desktop, and they fire on a **fixed price
+level, intraday**. The rule that matters here is neither: it is *two consecutive closes
+below the 50-day*, judged after the close, against an average that rises every session. A
+price alert can only approximate it, and drifts out of date as the average moves.
+
+`fireplanner notify` watches the real condition instead, because the model has already
+computed it.
+
+```bash
+export TELEGRAM_BOT_TOKEN=...   # @BotFather -> /newbot
+export TELEGRAM_CHAT_ID=...     # message the bot, then GET /bot<TOKEN>/getUpdates
+
+fireplanner notify --dry-run --force    # see the message without sending
+fireplanner notify                      # send only if something changed
+```
+
+**It stays quiet on purpose.** Nothing is sent unless one of these happens, and state is
+kept on disk so a scheduler firing twice a day does not message you twice:
+
+| Event | Urgency |
+|---|---|
+| Confirmed break of the 50-day (two closes) | ⚠️ urgent — this overrides the cooldown |
+| First close below the 50-day | 🔔 heads-up; nothing has changed yet |
+| Committed target moved | 🔔 the actionable one |
+| Instruction changed to BUY/SELL | 🔔 |
+
+A notifier that pings you daily is one you learn to ignore, which is the same as not
+having it. Set both env vars in `deploy/.env` and the Compose stack sends automatically
+after each successful build; leave either blank and it silently does nothing. A failed
+send is logged and never fails the build.
+
 ## Operational reality check
 
 - **The gateway will log you out daily.** IBC handles the restart; 2FA may still need a tap on

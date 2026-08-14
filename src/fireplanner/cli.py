@@ -206,6 +206,39 @@ def cmd_desk(args) -> int:
     return 0
 
 
+def cmd_notify(args) -> int:
+    from .dashboard import build_payload
+    from .dashboard.build import add_decision
+    from .notify import TelegramNotifier, notify_if_changed
+    from .signals import AllocationPolicy
+
+    provider = _provider(args)
+    payload = build_payload(
+        provider, benchmark=args.benchmark, vol_symbol=args.vol_symbol,
+        breadth_symbol=args.breadth_symbol, term_symbol=args.term_symbol,
+        watchlist=[args.benchmark], lookback_days=args.lookback,
+    )
+    payload = add_decision(payload, policy=AllocationPolicy(core_weight=args.core,
+                                                            sleeve_max=1.0 - args.core))
+    notifier = TelegramNotifier(dry_run=args.dry_run)
+    result = notify_if_changed(payload, notifier=notifier,
+                               state_path=args.state, force=args.force)
+
+    print()
+    if result.events:
+        for ev in result.events:
+            print(f"  [{ev.urgency:6s}] {ev.headline}")
+    else:
+        print("  no change since the last notification")
+    print(f"\n  sent: {result.sent}   ({result.reason})")
+    if result.message and (args.dry_run or not result.sent):
+        print("\n  --- message ---")
+        for line in result.message.splitlines():
+            print(f"  {line}")
+        print()
+    return 0
+
+
 def cmd_publish(args) -> int:
     from .dashboard import build_payload
     from .dashboard.build import add_decision
@@ -298,6 +331,14 @@ def main(argv=None) -> int:
     s.add_argument("--core", type=float, default=0.40,
                    help="permanent core allocation, never sold")
     s.set_defaults(func=cmd_desk)
+
+    s = sub.add_parser("notify", help="push the signal to Telegram when it changes")
+    s.add_argument("--core", type=float, default=0.40)
+    s.add_argument("--dry-run", action="store_true", help="render the message without sending")
+    s.add_argument("--force", action="store_true", help="send even if nothing changed")
+    s.add_argument("--state", default=".cache/notify_state.json",
+                   help="where the last-notified state is kept")
+    s.set_defaults(func=cmd_notify)
 
     s = sub.add_parser("publish", help="write the static site (index + both pages)")
     s.add_argument("symbols", nargs="*")

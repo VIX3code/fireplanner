@@ -25,6 +25,12 @@ run_once() {
         publish ${SYMBOLS} --core "${CORE}" ${REDACT} -o "${OUT_DIR}"
   then
     log "ok"
+    # Push to Telegram only when the decision actually changed. Silent otherwise.
+    if [ -n "${TELEGRAM_BOT_TOKEN:-}" ] && [ -n "${TELEGRAM_CHAT_ID:-}" ]; then
+      fireplanner --provider gateway \
+          --host "${IB_HOST}" --port "${IB_PORT}" --client-id "${IB_CLIENT_ID}" --cache \
+          notify --core "${CORE}" --state /site/.notify_state.json || log "notify failed (non-fatal)"
+    fi
   else
     # A failed refresh must not blank the site. The previous files stay in
     # place and status.json keeps its old timestamp, which is what the

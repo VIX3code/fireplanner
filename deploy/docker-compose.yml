@@ -52,6 +52,10 @@ services:
       REDACT: ${REDACT:---redact}
       SYMBOLS: ${SYMBOLS:-SPY}
       CORE: ${CORE:-0.40}
+      # Optional. Set both and the generator pushes to Telegram when the
+      # decision changes; leave either blank and it stays silent.
+      TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:-}
+      TELEGRAM_CHAT_ID: ${TELEGRAM_CHAT_ID:-}
       TZ: ${TZ:-America/New_York}
     volumes:
       - site:/site

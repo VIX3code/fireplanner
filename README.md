@@ -20,6 +20,7 @@ fireplanner plan SPY --equity 77674                  # size a position
 fireplanner backtest SPY --core-weight 0.4           # strategy vs buy-and-hold
 fireplanner dashboard SPY NVDA ZS -o dashboard.html  # the full analysis page
 fireplanner publish --redact -o site                 # static site, safe to host
+fireplanner notify                                   # Telegram, only when it changes
 ```
 
 Two pages, deliberately separate. **`desk`** answers *what should I do today* — one
