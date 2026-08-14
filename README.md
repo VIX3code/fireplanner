@@ -354,7 +354,8 @@ liquidation, every position and your trade sizes. Redaction strips all of it whi
 targets, prices and regime, so the signal survives and the balance sheet does not —
 `tests/test_publish.py` asserts on the rendered bytes that no account figure leaks.
 
-`deploy/` ships a Docker Compose stack (IB Gateway + generator + Caddy with TLS and auth, with
+`deploy/macos/` ships a launchd job for a Mac that already runs TWS — own virtualenv, own
+label, stages each build and only swaps it in on success. `deploy/` also ships a Docker Compose stack (IB Gateway + generator + Caddy with TLS and auth, with
 the gateway on an internal-only network and no published ports), systemd unit and timer for a
 bare-metal box, and a Caddyfile with three auth options. Full guide, including the
 market-data redistribution caveat: **[docs/DEPLOYMENT.md](docs/DEPLOYMENT.md)**.

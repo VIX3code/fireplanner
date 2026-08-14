@@ -6,7 +6,9 @@ build-backend = "setuptools.build_meta"
 name = "fireplanner"
 version = "0.1.0"
 description = "Swing/position trading research and monitoring stack for S&P 500 index and single names, wired to Interactive Brokers"
-requires-python = ">=3.10"
+# 3.9 is the floor because that is what ships as python3 on a stock macOS
+# install. The full suite is verified green on 3.9.23 / pandas 2.3.3.
+requires-python = ">=3.9"
 dependencies = [
     "pandas>=2.0",
     "numpy>=1.24",

@@ -83,7 +83,66 @@ Notes on the compose file, all deliberate:
 Start with `IB_MODE=paper` and `IB_PORT=4002`. Move to live only once you have watched it
 regenerate correctly for a few sessions.
 
-## Option B — systemd on a box that already runs IB Gateway
+## Option B — macOS + launchd (for a Mac that already runs TWS)
+
+The natural fit if you keep a Mac on with IB Gateway logged in. `deploy/macos/` has
+everything; it creates its own virtualenv and its own launchd label, and touches no other
+scheduled job.
+
+```bash
+git clone https://github.com/VIX3code/fireplanner.git
+cd fireplanner && git checkout claude/sp500-ibkr-trading-system-fgpxrc
+
+IB_PORT=4001 ./deploy/macos/install.sh        # 4001 live · 4002 paper · 7496/7497 TWS
+```
+
+Prefer to keep it beside your existing jobs? Copy the two scripts anywhere and point them
+at the checkout:
+
+```bash
+cp deploy/macos/{run_fireplanner.sh,install.sh,com.fireplanner.publish.plist} \
+   ~/Claude/Scheduled/
+FIREPLANNER_REPO=~/fireplanner IB_PORT=4001 ~/Claude/Scheduled/install.sh
+```
+
+Test it immediately rather than waiting for the schedule:
+
+```bash
+launchctl kickstart -p gui/$UID/com.fireplanner.publish
+tail -f ~/Claude/Scheduled/fireplanner.log
+open ~/Claude/Scheduled/fireplanner_site/index.html
+```
+
+**It runs weekdays at 16:35 local**, just after the close, so the session's bar is
+complete — earlier would ingest a half-formed bar, and later gains nothing because daily
+bars do not change again. launchd fires a missed calendar interval once on wake, so a
+sleeping Mac catches up rather than skipping the day.
+
+The runner is written for unattended operation, which mostly means refusing to do harm:
+
+- **It stages the build and only swaps it in on success.** A failed run leaves yesterday's
+  complete pages in place; the staleness banner then tells you they are old. A half-written
+  page is worse than an old one.
+- **It checks the gateway is actually listening first.** Otherwise the failure is a
+  30-second timeout buried in a stack trace.
+- **It always exits 0.** A closed market or a sleeping gateway is not an error worth having
+  launchd retry.
+
+Everything lands next to the scripts: `fireplanner.log`, `fireplanner_site/`,
+`fireplanner-venv/`. To remove it:
+
+```bash
+launchctl bootout gui/$UID/com.fireplanner.publish
+rm ~/Library/LaunchAgents/com.fireplanner.publish.plist
+```
+
+### Python on macOS
+
+Stock macOS ships Python 3.9, so that is the supported floor — the full suite is verified
+green on 3.9.23 with pandas 2.3.3. `install.sh` prefers a newer interpreter if one is on
+PATH and falls back to `python3`.
+
+## Option B2 — systemd on a box that already runs IB Gateway
 
 ```bash
 sudo cp deploy/fireplanner.{service,timer} /etc/systemd/system/
