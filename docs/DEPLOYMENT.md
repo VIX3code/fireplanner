@@ -165,6 +165,28 @@ fireplanner notify --dry-run --force    # see the message without sending
 fireplanner notify                      # send only if something changed
 ```
 
+### Reusing a bot you already have
+
+If a bot already serves another project, point FirePlanner at that project's env file
+rather than copying the token. Two copies of a secret is one more than necessary, and the
+second is the one that gets committed by accident.
+
+```bash
+fireplanner notify --env-file ~/daily-market-update/.env
+```
+
+Three things matter when one bot serves several systems:
+
+- **`--source`** (default `FirePlanner`) prefixes every message. Without it, "Target cut to
+  40%" arrives in the same chat as your other alerts with nothing saying which system
+  spoke.
+- **`--thread-id`** posts into a specific forum topic, so these do not interleave with the
+  other project's feed in a shared group. Set `TELEGRAM_THREAD_ID` to make it permanent.
+- **The state file is per-project.** Keep `--state` distinct so the two systems cannot
+  suppress each other's notifications.
+
+Precedence is explicit argument → `--env-file` → process environment.
+
 **It stays quiet on purpose.** Nothing is sent unless one of these happens, and state is
 kept on disk so a scheduler firing twice a day does not message you twice:
 

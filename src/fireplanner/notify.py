@@ -41,9 +41,41 @@ __all__ = [
     "detect_events",
     "format_message",
     "notify_if_changed",
+    "load_env_file",
 ]
 
 API = "https://api.telegram.org"
+
+
+def load_env_file(path: str | Path) -> dict[str, str]:
+    """Read ``KEY=VALUE`` pairs from an existing env file.
+
+    Exists so a bot already serving another project can be reused without
+    copying its token to a second place. Two copies of a secret is one more than
+    necessary, and the second is the one that gets committed by accident.
+
+    Deliberately minimal: no interpolation, no export handling beyond a leading
+    ``export``, no shell semantics. Values are returned, never logged.
+    """
+    out: dict[str, str] = {}
+    p = Path(path).expanduser()
+    if not p.exists():
+        raise FileNotFoundError(f"no env file at {p}")
+
+    for raw in p.read_text().splitlines():
+        line = raw.strip()
+        if not line or line.startswith("#"):
+            continue
+        if line.startswith("export "):
+            line = line[len("export "):].lstrip()
+        if "=" not in line:
+            continue
+        key, _, value = line.partition("=")
+        value = value.strip()
+        if len(value) >= 2 and value[0] == value[-1] and value[0] in "\"'":
+            value = value[1:-1]
+        out[key.strip()] = value
+    return out
 
 
 class TelegramNotifier:
@@ -61,9 +93,22 @@ class TelegramNotifier:
         dry_run: bool = False,
         timeout: int = 15,
         base_url: str = API,
+        thread_id: str | None = None,
+        env_file: str | Path | None = None,
+        source: str = "FirePlanner",
     ):
-        self.token = token or os.environ.get("TELEGRAM_BOT_TOKEN", "")
-        self.chat_id = chat_id or os.environ.get("TELEGRAM_CHAT_ID", "")
+        env = load_env_file(env_file) if env_file else {}
+
+        def pick(explicit: str | None, key: str) -> str:
+            return explicit or env.get(key) or os.environ.get(key, "")
+
+        self.token = pick(token, "TELEGRAM_BOT_TOKEN")
+        self.chat_id = pick(chat_id, "TELEGRAM_CHAT_ID")
+        # Forum topic, when one bot serves several purposes in one group.
+        self.thread_id = pick(thread_id, "TELEGRAM_THREAD_ID")
+        # Prefixes every message. Sharing a bot between systems is fine; leaving
+        # the reader to guess which one just said "target cut to 40%" is not.
+        self.source = source
         self.dry_run = dry_run
         self.timeout = timeout
         self.base_url = base_url.rstrip("/")
@@ -79,18 +124,22 @@ class TelegramNotifier:
             raise RuntimeError(
                 "Telegram is not configured — set TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID"
             )
+        if self.source:
+            text = f"<b>[{html.escape(self.source)}]</b>\n{text}"
+
         self.sent.append(text)
         if self.dry_run:
             return {"ok": True, "dry_run": True, "text": text}
 
-        payload = json.dumps(
-            {
-                "chat_id": self.chat_id,
-                "text": text,
-                "parse_mode": "HTML",
-                "disable_web_page_preview": disable_preview,
-            }
-        ).encode()
+        body = {
+            "chat_id": self.chat_id,
+            "text": text,
+            "parse_mode": "HTML",
+            "disable_web_page_preview": disable_preview,
+        }
+        if self.thread_id:
+            body["message_thread_id"] = int(self.thread_id)
+        payload = json.dumps(body).encode()
         req = urllib.request.Request(
             f"{self.base_url}/bot{self.token}/sendMessage",
             data=payload,

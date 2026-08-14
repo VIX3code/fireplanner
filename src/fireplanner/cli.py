@@ -220,7 +220,12 @@ def cmd_notify(args) -> int:
     )
     payload = add_decision(payload, policy=AllocationPolicy(core_weight=args.core,
                                                             sleeve_max=1.0 - args.core))
-    notifier = TelegramNotifier(dry_run=args.dry_run)
+    notifier = TelegramNotifier(
+        dry_run=args.dry_run,
+        env_file=args.env_file or None,
+        thread_id=args.thread_id or None,
+        source=args.source,
+    )
     result = notify_if_changed(payload, notifier=notifier,
                                state_path=args.state, force=args.force)
 
@@ -231,9 +236,12 @@ def cmd_notify(args) -> int:
     else:
         print("  no change since the last notification")
     print(f"\n  sent: {result.sent}   ({result.reason})")
-    if result.message and (args.dry_run or not result.sent):
-        print("\n  --- message ---")
-        for line in result.message.splitlines():
+    # Show exactly what went over the wire (which includes the source label),
+    # falling back to the rendered body when nothing was handed to the client.
+    preview = notifier.sent[-1] if notifier.sent else result.message
+    if preview and (args.dry_run or not result.sent):
+        print("\n  --- message as sent ---")
+        for line in preview.splitlines():
             print(f"  {line}")
         print()
     return 0
@@ -338,6 +346,13 @@ def main(argv=None) -> int:
     s.add_argument("--force", action="store_true", help="send even if nothing changed")
     s.add_argument("--state", default=".cache/notify_state.json",
                    help="where the last-notified state is kept")
+    s.add_argument("--env-file", default="",
+                   help="read TELEGRAM_* from an existing env file, e.g. another "
+                        "project's .env, so the token lives in one place only")
+    s.add_argument("--thread-id", default="",
+                   help="Telegram forum topic id, to keep these out of a shared group's main feed")
+    s.add_argument("--source", default="FirePlanner",
+                   help="label prefixed to every message; matters when one bot serves several systems")
     s.set_defaults(func=cmd_notify)
 
     s = sub.add_parser("publish", help="write the static site (index + both pages)")

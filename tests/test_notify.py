@@ -51,7 +51,9 @@ def test_dry_run_records_without_sending():
     n = TelegramNotifier(token="t", chat_id="c", dry_run=True)
     out = n.send("hello")
     assert out["dry_run"] is True
-    assert n.sent == ["hello"]
+    # the source label is prepended by default — see test_messages_are_labelled_with_their_source
+    assert len(n.sent) == 1
+    assert n.sent[0].endswith("hello")
 
 
 # ---------------------------------------------------------------- quiet by default
@@ -222,3 +224,54 @@ def test_corrupt_state_file_is_survivable(payload, tmp_path):
     n = TelegramNotifier(token="t", chat_id="c", dry_run=True)
     result = notify_if_changed(payload, notifier=n, state_path=state)
     assert isinstance(result.events, list)
+
+
+# ---------------------------------------------------------------- shared bot
+
+def test_credentials_can_come_from_an_existing_env_file(tmp_path):
+    """Reuse a bot from another project without copying its token."""
+    env = tmp_path / "other-project.env"
+    env.write_text(
+        "# daily market update\n"
+        "export TELEGRAM_BOT_TOKEN='123:abc'\n"
+        'TELEGRAM_CHAT_ID="-1001234567890"\n'
+        "TELEGRAM_THREAD_ID=42\n"
+        "UNRELATED=ignored\n"
+    )
+    n = TelegramNotifier(env_file=env, dry_run=True)
+    assert n.configured
+    assert n.chat_id == "-1001234567890"
+    assert n.thread_id == "42"
+
+
+def test_explicit_arguments_beat_the_env_file(tmp_path):
+    env = tmp_path / ".env"
+    env.write_text("TELEGRAM_BOT_TOKEN=from_file\nTELEGRAM_CHAT_ID=from_file\n")
+    n = TelegramNotifier(token="explicit", env_file=env, dry_run=True)
+    assert n.token == "explicit"
+    assert n.chat_id == "from_file"
+
+
+def test_missing_env_file_is_an_explicit_error(tmp_path):
+    with pytest.raises(FileNotFoundError):
+        TelegramNotifier(env_file=tmp_path / "nope.env")
+
+
+def test_messages_are_labelled_with_their_source():
+    """One bot, two systems — the reader must not have to guess which spoke."""
+    n = TelegramNotifier(token="t", chat_id="c", dry_run=True, source="FirePlanner")
+    n.send("Target cut to 40%")
+    assert n.sent[0].startswith("<b>[FirePlanner]</b>")
+    assert "Target cut to 40%" in n.sent[0]
+
+
+def test_source_label_is_escaped():
+    n = TelegramNotifier(token="t", chat_id="c", dry_run=True, source="<b>x</b>")
+    n.send("hi")
+    assert "&lt;b&gt;x&lt;/b&gt;" in n.sent[0]
+
+
+def test_source_can_be_disabled():
+    n = TelegramNotifier(token="t", chat_id="c", dry_run=True, source="")
+    n.send("plain")
+    assert n.sent[0] == "plain"
