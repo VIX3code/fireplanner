@@ -73,6 +73,18 @@ def test_exactly_one_staleness_banner(page):
     assert "does not refresh itself" in page
 
 
+def test_it_asks_not_to_be_indexed(page):
+    """Reachable and findable are different things.
+
+    A page nobody links to still gets indexed once the URL turns up in a
+    referrer log or a shared link, and a search result for your own trading
+    decisions is not a thing you can take back. The meta tag travels with the
+    file, so it works on every host — unlike a Netlify ``_headers`` entry or an
+    nginx ``add_header``, which only work on the one you configured.
+    """
+    assert '<meta name="robots" content="noindex, nofollow, noarchive">' in page
+
+
 def test_no_external_requests(page):
     """The whole point of a self-contained file: it works from a file:// URL
     and cannot be broken by a CDN, a font host, or a strict CSP."""

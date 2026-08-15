@@ -17,7 +17,7 @@ import numpy as np
 import pandas as pd
 
 from .charts import Series, fmt, line_chart, sparkline
-from .render import _CSS, _JS, _details_table, _sign, _table
+from .render import HEAD_META, _CSS, _JS, _details_table, _sign, _table
 
 __all__ = ["render_desk", "desk_sections"]
 
@@ -132,6 +132,7 @@ def render_desk(p, title: str = "S&P 500 Signal Desk") -> str:
     """Render the decision page from a `DashboardPayload` carrying `decision`."""
     return (
         f"<title>{html.escape(title)}</title>"
+        + HEAD_META
         + _CSS
         + _DESK_CSS
         + f'<main class="viz-root">{"".join(desk_sections(p, title))}</main>'

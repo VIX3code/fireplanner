@@ -57,6 +57,9 @@ if [ ! -f "$HERE/fireplanner.env" ] && [ -f "$HERE/fireplanner.env.example" ]; t
 else
   say "config    $HERE/fireplanner.env  (left as is)"
 fi
+# It holds a deploy token once you set one up, so it is owner-read regardless of
+# whether this run created it.
+chmod 600 "$HERE/fireplanner.env" 2>/dev/null || true
 
 # ---- launchd --------------------------------------------------------------
 mkdir -p "$HOME/Library/LaunchAgents"

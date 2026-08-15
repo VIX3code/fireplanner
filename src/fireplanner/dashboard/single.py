@@ -26,7 +26,7 @@ from __future__ import annotations
 import html
 
 from .desk import _DESK_CSS, DISCLAIMER, desk_sections, stale_banner
-from .render import _CSS, _JS, dashboard_sections
+from .render import HEAD_META, _CSS, _JS, dashboard_sections
 
 __all__ = ["render_single"]
 
@@ -86,6 +86,7 @@ def render_single(p, title: str = "S&P 500 Signal Desk") -> str:
     # class, no rule, everything shows.
     return (
         f"<title>{html.escape(title)}</title>"
+        + HEAD_META
         + _CSS
         + _DESK_CSS
         + _SINGLE_CSS

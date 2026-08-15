@@ -34,6 +34,14 @@ def test_publish_writes_the_expected_files(payload, tmp_path):
         assert manifest["files"][name] > 0
 
 
+def test_every_published_page_asks_not_to_be_indexed(payload, tmp_path):
+    """Hosting it makes it reachable; it should not also make it findable."""
+    publish_site(payload, out_dir=tmp_path / "site")
+    for name in ("index.html", "signal_desk.html", "dashboard.html"):
+        text = (tmp_path / "site" / name).read_text()
+        assert '<meta name="robots" content="noindex' in text, name
+
+
 def test_published_pages_have_no_external_requests(payload, tmp_path):
     """The whole two-tier deployment rests on this being true."""
     publish_site(payload, out_dir=tmp_path / "site")

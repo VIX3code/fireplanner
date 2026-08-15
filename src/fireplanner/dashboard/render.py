@@ -15,7 +15,15 @@ import pandas as pd
 
 from .charts import Series, fmt, hbar_chart, line_chart, meter, sparkline
 
-__all__ = ["render_html", "dashboard_sections"]
+__all__ = ["render_html", "dashboard_sections", "HEAD_META"]
+
+
+#: Emitted by every page. Hosting this on a domain makes it reachable; it should
+#: not also make it findable. Nobody searching the web should land on your
+#: trading decisions, and a page that is merely un-linked still gets indexed the
+#: moment the URL appears in a referrer log or a shared link. Works on any host,
+#: unlike a Netlify ``_headers`` file or an nginx ``add_header``.
+HEAD_META = '<meta name="robots" content="noindex, nofollow, noarchive">'
 
 
 STATUS_FOR_LABEL = {
@@ -71,6 +79,7 @@ def render_html(p, title: str = "FirePlanner") -> str:
     # <title> first so any host that scans only the head of the file finds it.
     return (
         f"<title>{html.escape(title)}</title>"
+        + HEAD_META
         + _CSS
         + f'<main class="viz-root">{"".join(dashboard_sections(p, title))}</main>'
         + _JS

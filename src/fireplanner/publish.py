@@ -96,6 +96,7 @@ def redact_payload(payload):
 
 
 INDEX_TEMPLATE = """<title>FirePlanner</title>
+<meta name="robots" content="noindex, nofollow, noarchive">
 <style>
 :root {{ color-scheme: light; --bg:#f9f9f7; --card:#fcfcfb; --ink:#0b0b0b;
         --dim:#52514e; --line:rgba(11,11,11,0.10); --accent:#2a78d6; }}

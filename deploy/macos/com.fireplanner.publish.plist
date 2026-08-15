@@ -39,9 +39,12 @@
 
   <key>EnvironmentVariables</key>
   <dict>
-    <!-- launchd starts with a minimal PATH; spell it out. -->
+    <!-- launchd starts with a minimal PATH; spell it out. /opt/homebrew/bin is
+         where Homebrew installs on Apple Silicon, and is where node and the
+         netlify CLI live if you installed them that way — leaving it off is a
+         "command not found" that only ever shows up in the log. -->
     <key>PATH</key>
-    <string>/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+    <string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
     <key>IB_PORT</key>
     <string>__IBPORT__</string>
   </dict>

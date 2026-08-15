@@ -171,35 +171,62 @@ The runner is written for unattended operation, which mostly means refusing to d
 
 ### Pushing it to your own domain
 
-`install.sh` seeds `deploy/macos/fireplanner.env` (gitignored, never overwritten on
-re-install). The runner sources it every run, so edits take effect immediately — no plist
+`install.sh` seeds `deploy/macos/fireplanner.env` (gitignored, `chmod 600`, never overwritten
+on re-install). The runner sources it every run, so edits take effect immediately — no plist
 regeneration, no `launchctl` reload.
 
-```bash
-# deploy/macos/fireplanner.env
-IB_PORT=4001
-FIREPLANNER_SINGLE=1
-FIREPLANNER_RSYNC_TARGET="me@myhost.com:/var/www/fireplanner/"   # trailing slash matters
-```
-
-That is the whole domain setup. After each close the Mac rebuilds the page and rsyncs it up;
-`--delete` keeps the host from accumulating files the build no longer produces.
-
-**Setting a deploy target turns redaction on by default.** The pages otherwise carry your net
+**Setting any deploy target turns redaction on by default.** The pages otherwise carry your net
 liquidation, your positions and your trade sizes, and a page published with those in it cannot
 be un-published. `FIREPLANNER_REDACT=0` overrides it and the runner logs a warning every run.
 
-For anything that is not rsync, `FIREPLANNER_PUBLISH_CMD` receives the build directory as `$1`:
+Every page also ships `<meta name="robots" content="noindex, nofollow, noarchive">`. Hosting
+it makes it reachable; it should not also make it findable, and a page nobody links to still
+gets indexed once the URL appears in a referrer log. The tag travels with the file, so it
+works on any host.
+
+#### Netlify
+
+```bash
+npm install -g netlify-cli        # once
+```
+
+```bash
+# deploy/macos/fireplanner.env
+FIREPLANNER_SINGLE=1
+FIREPLANNER_NETLIFY_SITE="00000000-1111-2222-3333-444444444444"
+NETLIFY_AUTH_TOKEN="nfp_..."
+```
+
+The site ID is under **Site configuration → General → Site ID**; the token under **User
+settings → Applications → Personal access tokens**. The runner deploys with `CI=1` so the CLI
+never tries to prompt in a job with no terminal, and resolves the `netlify` binary by path
+because launchd's PATH does not include Homebrew's directory on Apple Silicon.
+
+#### rsync over SSH
+
+```bash
+FIREPLANNER_RSYNC_TARGET="me@myhost.com:/var/www/fireplanner/"   # trailing slash matters
+```
+
+`--delete` keeps the host from accumulating files the build no longer produces. One trap: a
+launchd job has no terminal, so an SSH key with a passphrase would hang rather than prompt.
+The runner passes `BatchMode=yes` so it fails fast and logs instead. Use a passphrase-less
+deploy key, or add the key to the login keychain (`ssh-add --apple-use-keychain
+~/.ssh/id_ed25519`) with `UseKeychain yes` in `~/.ssh/config`.
+
+#### Anything else
+
+`FIREPLANNER_PUBLISH_CMD` receives the build directory as `$1`:
 
 ```bash
 FIREPLANNER_PUBLISH_CMD='aws s3 sync "$1" s3://my-bucket/ --delete'
 FIREPLANNER_PUBLISH_CMD='npx --yes wrangler pages deploy "$1" --project-name fireplanner'
+FIREPLANNER_PUBLISH_CMD='rclone sync "$1" mydrive:fireplanner'
 ```
 
-One macOS-specific trap: a launchd job has no terminal, so an SSH key with a passphrase will
-hang rather than prompt. The runner passes `BatchMode=yes` so it fails fast and logs instead.
-Use a passphrase-less deploy key, or add the key to the login keychain (`ssh-add
---apple-use-keychain ~/.ssh/id_ed25519`) with `UseKeychain yes` in `~/.ssh/config`.
+All of these run **only after a build that succeeded**, so a failed run can never replace a
+good page on your host — and a failed upload leaves the local build intact for the next
+attempt.
 
 Everything lands next to the scripts: `fireplanner.log`, `fireplanner_site/`,
 `fireplanner-venv/`, `fireplanner.env`. To remove it:

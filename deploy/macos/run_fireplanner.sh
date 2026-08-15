@@ -29,6 +29,7 @@ CORE="${FIREPLANNER_CORE:-0.40}"
 SYMBOLS="${FIREPLANNER_SYMBOLS:-SPY}"
 SINGLE="${FIREPLANNER_SINGLE:-1}"          # 1 = one index.html, 0 = three linked files
 RSYNC_TARGET="${FIREPLANNER_RSYNC_TARGET:-}"   # e.g. me@host:/var/www/fireplanner/
+NETLIFY_SITE="${FIREPLANNER_NETLIFY_SITE:-}"   # Netlify site ID, with NETLIFY_AUTH_TOKEN
 PUBLISH_CMD="${FIREPLANNER_PUBLISH_CMD:-}"     # anything else; receives $OUT as $1
 
 log() { echo "[$(date '+%Y-%m-%d %H:%M:%S')] $*" >> "$LOG"; }
@@ -52,7 +53,7 @@ fi
 # That is fine on this Mac and unrecoverable on a domain, so anything with a
 # deploy target is redacted unless you have explicitly said otherwise. The
 # default is chosen by whether this build leaves the machine, not by taste.
-if [ -n "$RSYNC_TARGET" ] || [ -n "$PUBLISH_CMD" ]; then
+if [ -n "$RSYNC_TARGET" ] || [ -n "$NETLIFY_SITE" ] || [ -n "$PUBLISH_CMD" ]; then
   REDACT="${FIREPLANNER_REDACT:-1}"
   if [ "$REDACT" != "1" ]; then
     log "WARNING: uploading UNREDACTED pages — balances, positions and trade sizes will be public"
@@ -109,6 +110,37 @@ if [ -n "$RSYNC_TARGET" ]; then
     log "UPLOADED: $RSYNC_TARGET"
   else
     log "UPLOAD FAILED: $RSYNC_TARGET — the local build in $OUT is still good"
+  fi
+fi
+
+if [ -n "$NETLIFY_SITE" ]; then
+  if [ -z "${NETLIFY_AUTH_TOKEN:-}" ]; then
+    log "SKIP netlify: NETLIFY_AUTH_TOKEN is not set in fireplanner.env"
+  else
+    # launchd runs with a minimal PATH and Homebrew on Apple Silicon installs to
+    # /opt/homebrew/bin, which is not on it. Resolving the binary here rather
+    # than trusting PATH is the difference between this working and a daily
+    # "netlify: command not found" that only appears in the log.
+    NETLIFY_BIN="${FIREPLANNER_NETLIFY_BIN:-}"
+    if [ -z "$NETLIFY_BIN" ]; then
+      for c in netlify /opt/homebrew/bin/netlify /usr/local/bin/netlify \
+               "$HOME/.npm-global/bin/netlify" "$HOME/.local/bin/netlify"; do
+        if command -v "$c" >/dev/null 2>&1; then NETLIFY_BIN="$(command -v "$c")"; break; fi
+      done
+    fi
+    if [ -z "$NETLIFY_BIN" ]; then
+      log "SKIP netlify: no netlify CLI found — 'npm install -g netlify-cli', or set FIREPLANNER_NETLIFY_BIN"
+    else
+      export NETLIFY_AUTH_TOKEN
+      # CI=1 keeps it from trying to prompt in a job with no terminal.
+      if CI=1 NETLIFY_TELEMETRY_DISABLED=1 "$NETLIFY_BIN" deploy \
+            --prod --no-build --dir "$OUT" --site "$NETLIFY_SITE" \
+            --message "signal $(date '+%Y-%m-%d')" >> "$LOG" 2>&1; then
+        log "UPLOADED to Netlify site $NETLIFY_SITE"
+      else
+        log "NETLIFY DEPLOY FAILED — the local build in $OUT is still good"
+      fi
+    fi
   fi
 fi
 
