@@ -77,9 +77,25 @@ if [ -z "$PY" ]; then
     echo "  Install a newer Python, then re-run this script — it picks up the"
     echo "  newest one it can find and rebuilds the virtualenv automatically."
     echo
-    echo "    brew install python@3.12"
-    echo
-    echo "  or download the macOS installer from https://www.python.org/downloads/"
+    # Lead with what will actually work on THIS machine. Suggesting Homebrew to
+    # someone who does not have it just sends them to `brew: command not found`
+    # and a second round trip.
+    if command -v brew >/dev/null 2>&1; then
+      echo "    brew install python@3.12"
+      echo
+      echo "  or the macOS installer from https://www.python.org/downloads/macos/"
+    else
+      echo "  You do not have Homebrew, so use the official installer:"
+      echo
+      echo "    1. Open https://www.python.org/downloads/macos/"
+      echo "    2. Under 'Stable Releases', pick the latest Python 3.12.x"
+      echo "    3. Download 'macOS 64-bit universal2 installer' (.pkg) and run it"
+      echo "    4. Open '/Applications/Python 3.12/Install Certificates.command'"
+      echo "       (one double-click — without it HTTPS from Python can fail)"
+      echo
+      echo "  3.12 rather than the newest release on purpose: pandas and numpy"
+      echo "  ship ready-built wheels for it, so nothing has to compile."
+    fi
     echo
     echo "  Nothing else on your Mac changes: this installs a second Python"
     echo "  alongside the one you have and uses it only for FirePlanner."
