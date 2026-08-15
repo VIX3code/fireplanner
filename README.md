@@ -361,8 +361,10 @@ companion test asserts the unredacted build *does* carry them, so the guard cann
 vacuously.
 
 `deploy/macos/` ships a launchd job for a Mac that already runs TWS — own virtualenv, own
-label, stages each build and only swaps it in on success, and rsyncs the result to your domain
-if you set a target in `fireplanner.env`. Setting a deploy target turns redaction on by
+label, stages each build and only swaps it in on success, and rsyncs (or Netlify-deploys) the
+result to your domain if you set a target in `fireplanner.env`. It runs at **07:00 local
+daily** by default, a pre-open read of the previous session's complete close;
+`FIREPLANNER_TIMES` changes that. Setting a deploy target turns redaction on by
 default, because a page published with your balance sheet in it cannot be un-published.
 `deploy/` also ships a Docker Compose stack (IB Gateway + generator + Caddy with TLS and auth,
 with the gateway on an internal-only network and no published ports), systemd unit and timer

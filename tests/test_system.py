@@ -405,6 +405,30 @@ def test_drops_a_session_still_in_progress():
     assert kept.index[-1].date().isoformat() == "2026-08-12"
 
 
+def test_a_pre_open_run_reads_the_previous_close():
+    """The scheduled job runs at 07:00 local, before the bell.
+
+    Nothing has traded yet, so the newest *complete* bar is yesterday's. If a
+    pre-market bar dated today slipped through, every indicator would be
+    computed from a single print and the page would show a signal derived from
+    noise — the one failure this rule exists to prevent.
+    """
+    from fireplanner.data import drop_incomplete_last_bar
+
+    idx = pd.to_datetime(["2026-08-12", "2026-08-13"])
+    df = pd.DataFrame({"close": [772.49, 776.13]}, index=idx)
+
+    pre_open = pd.Timestamp("2026-08-13 07:00", tz="America/New_York")
+    kept = drop_incomplete_last_bar(df, now=pre_open, tz="America/New_York")
+    assert len(kept) == 1
+    assert kept.index[-1].date().isoformat() == "2026-08-12"
+
+    # ...and the next morning, yesterday's close is complete and kept.
+    next_morning = pd.Timestamp("2026-08-14 07:00", tz="America/New_York")
+    kept = drop_incomplete_last_bar(df, now=next_morning, tz="America/New_York")
+    assert kept.index[-1].date().isoformat() == "2026-08-13"
+
+
 def test_keeps_the_bar_once_the_session_has_closed():
     from fireplanner.data import drop_incomplete_last_bar
 

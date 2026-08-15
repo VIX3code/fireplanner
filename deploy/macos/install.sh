@@ -13,7 +13,14 @@ VENV="$HERE/fireplanner-venv"
 LABEL="com.fireplanner.publish"
 PLIST_SRC="$HERE/com.fireplanner.publish.plist"
 PLIST_DST="$HOME/Library/LaunchAgents/$LABEL.plist"
-IB_PORT="${IB_PORT:-4001}"
+
+# Captured before fireplanner.env is sourced, and defaulted after, so that
+# anything given on the command line wins over the config file. Without this,
+# `IB_PORT=4002 ./install.sh` would be silently overridden by whatever the file
+# happened to say — the opposite of what typing it means.
+CLI_IB_PORT="${IB_PORT:-}"
+CLI_TIMES="${FIREPLANNER_TIMES:-}"
+CLI_DAYS="${FIREPLANNER_DAYS:-}"
 
 say() { printf '  %s\n' "$*"; }
 
@@ -52,7 +59,8 @@ say "installed  $("$VENV/bin/fireplanner" --help >/dev/null 2>&1 && echo ok || e
 # Seeded once and never overwritten, so re-running install.sh cannot clobber a
 # deploy target you have already set.
 if [ ! -f "$HERE/fireplanner.env" ] && [ -f "$HERE/fireplanner.env.example" ]; then
-  sed -e "s|^IB_PORT=.*|IB_PORT=$IB_PORT|" "$HERE/fireplanner.env.example" > "$HERE/fireplanner.env"
+  sed -e "s|^IB_PORT=.*|IB_PORT=${CLI_IB_PORT:-4001}|" \
+      "$HERE/fireplanner.env.example" > "$HERE/fireplanner.env"
   say "config    $HERE/fireplanner.env  (created — edit to publish to a domain)"
 else
   say "config    $HERE/fireplanner.env  (left as is)"
@@ -61,20 +69,70 @@ fi
 # whether this run created it.
 chmod 600 "$HERE/fireplanner.env" 2>/dev/null || true
 
+# ---- schedule -------------------------------------------------------------
+# The schedule lives in fireplanner.env so there is one config file, but unlike
+# everything else in there it is baked into the plist at install time: launchd
+# reads a schedule when the job is loaded, not when it runs. Changing it means
+# re-running install.sh.
+# shellcheck disable=SC1091
+[ -f "$HERE/fireplanner.env" ] && . "$HERE/fireplanner.env"
+IB_PORT="${CLI_IB_PORT:-${IB_PORT:-4001}}"
+TIMES="${CLI_TIMES:-${FIREPLANNER_TIMES:-07:00}}"    # comma-separated HH:MM, Mac local
+DAYS="${CLI_DAYS:-${FIREPLANNER_DAYS:-daily}}"       # daily | weekdays
+
 # ---- launchd --------------------------------------------------------------
 mkdir -p "$HOME/Library/LaunchAgents"
-sed -e "s|__SCRIPT__|$HERE/run_fireplanner.sh|g" \
-    -e "s|__LOGDIR__|$HERE|g" \
-    -e "s|__WORKDIR__|$HERE|g" \
-    -e "s|__IBPORT__|$IB_PORT|g" \
-    "$PLIST_SRC" > "$PLIST_DST"
+# plistlib rather than sed: the paths substituted below can contain characters
+# that would need escaping in a sed expression or would break the XML, and a
+# malformed plist fails at bootstrap with a message that names no cause.
+"$VENV/bin/python" - "$PLIST_SRC" "$PLIST_DST" "$HERE" "$IB_PORT" "$TIMES" "$DAYS" <<'PYEOF'
+import plistlib, sys
+
+src, dst, here, ib_port, times, days = sys.argv[1:7]
+
+with open(src, "rb") as fh:
+    plist = plistlib.load(fh)
+
+plist["ProgramArguments"] = ["/bin/bash", f"{here}/run_fireplanner.sh"]
+plist["StandardOutPath"] = f"{here}/fireplanner.launchd.out"
+plist["StandardErrorPath"] = f"{here}/fireplanner.launchd.err"
+plist["WorkingDirectory"] = here
+plist["EnvironmentVariables"]["IB_PORT"] = str(ib_port)
+
+# launchd weekdays: 0 and 7 are both Sunday, 1 is Monday.
+weekdays = [1, 2, 3, 4, 5] if days.strip().lower() == "weekdays" else [None]
+
+schedule = []
+for slot in times.split(","):
+    slot = slot.strip()
+    if not slot:
+        continue
+    hh, _, mm = slot.partition(":")
+    entry_base = {"Hour": int(hh), "Minute": int(mm or 0)}
+    for wd in weekdays:
+        entry = dict(entry_base)
+        if wd is not None:
+            entry["Weekday"] = wd
+        schedule.append(entry)
+
+if not schedule:
+    sys.exit(f"error: FIREPLANNER_TIMES={times!r} parsed to no runs")
+
+plist["StartCalendarInterval"] = schedule
+
+with open(dst, "wb") as fh:
+    plistlib.dump(plist, fh)
+
+print(f"  schedule  {times} local, {days}")
+PYEOF
+[ -f "$PLIST_DST" ] || { echo "error: failed to write $PLIST_DST" >&2; exit 1; }
 say "plist     $PLIST_DST"
 
 # bootout first so re-running install.sh is idempotent
 launchctl bootout "gui/$UID/$LABEL" 2>/dev/null || true
 launchctl bootstrap "gui/$UID" "$PLIST_DST"
 launchctl enable "gui/$UID/$LABEL"
-say "loaded    $LABEL (weekdays 16:35 local)"
+say "loaded    $LABEL"
 
 cat <<TXT
 

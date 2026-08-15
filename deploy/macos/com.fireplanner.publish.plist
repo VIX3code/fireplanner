@@ -2,6 +2,10 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
   "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
+<!-- Template. install.sh loads this, fills in the paths, the port and the
+     schedule, and writes the result to ~/Library/LaunchAgents/. It is never
+     loaded by launchd directly, so the placeholder paths below are only there
+     to keep this file a valid plist. -->
 <dict>
   <key>Label</key>
   <string>com.fireplanner.publish</string>
@@ -9,20 +13,20 @@
   <key>ProgramArguments</key>
   <array>
     <string>/bin/bash</string>
-    <string>__SCRIPT__</string>
+    <string>run_fireplanner.sh</string>
   </array>
 
-  <!-- Weekdays at 16:35 local time: just after the US close, so the session's
-       bar is complete. Running earlier ingests a half-formed bar; running much
-       later gains nothing, since daily bars do not change again. -->
+  <!-- Filled in by install.sh from FIREPLANNER_TIMES and FIREPLANNER_DAYS in
+       fireplanner.env; empty here because this file is a template, never loaded
+       directly. Times are the Mac's LOCAL time, which is what launchd uses.
+
+       The default is 07:00 daily: a pre-open read, showing the previous
+       session's complete close. Any time works — a run only ever sees the last
+       *completed* daily bar, and a partial bar for a session still in progress
+       is dropped rather than charted. What the time decides is how long the
+       page lags the close that produced it. -->
   <key>StartCalendarInterval</key>
-  <array>
-    <dict><key>Weekday</key><integer>1</integer><key>Hour</key><integer>16</integer><key>Minute</key><integer>35</integer></dict>
-    <dict><key>Weekday</key><integer>2</integer><key>Hour</key><integer>16</integer><key>Minute</key><integer>35</integer></dict>
-    <dict><key>Weekday</key><integer>3</integer><key>Hour</key><integer>16</integer><key>Minute</key><integer>35</integer></dict>
-    <dict><key>Weekday</key><integer>4</integer><key>Hour</key><integer>16</integer><key>Minute</key><integer>35</integer></dict>
-    <dict><key>Weekday</key><integer>5</integer><key>Hour</key><integer>16</integer><key>Minute</key><integer>35</integer></dict>
-  </array>
+  <array/>
 
   <!-- launchd fires a missed StartCalendarInterval once on wake, so a sleeping
        Mac catches up rather than silently skipping the day. -->
@@ -30,12 +34,12 @@
   <false/>
 
   <key>StandardOutPath</key>
-  <string>__LOGDIR__/fireplanner.launchd.out</string>
+  <string>fireplanner.launchd.out</string>
   <key>StandardErrorPath</key>
-  <string>__LOGDIR__/fireplanner.launchd.err</string>
+  <string>fireplanner.launchd.err</string>
 
   <key>WorkingDirectory</key>
-  <string>__WORKDIR__</string>
+  <string>.</string>
 
   <key>EnvironmentVariables</key>
   <dict>

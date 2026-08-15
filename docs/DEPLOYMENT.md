@@ -152,10 +152,32 @@ tail -f ~/Claude/Scheduled/fireplanner.log
 open ~/Claude/Scheduled/fireplanner_site/index.html
 ```
 
-**It runs weekdays at 16:35 local**, just after the close, so the session's bar is
-complete — earlier would ingest a half-formed bar, and later gains nothing because daily
-bars do not change again. launchd fires a missed calendar interval once on wake, so a
-sleeping Mac catches up rather than skipping the day.
+**It runs at 07:00 local, every day**, which is a pre-open read: the newest *complete* daily
+bar at that hour is the previous session's close, so you get the decision before the bell.
+launchd fires a missed calendar interval once on wake, so a sleeping Mac catches up rather
+than skipping the day.
+
+Change it in `fireplanner.env` and **re-run `install.sh`** — launchd reads a schedule when the
+job is loaded, not when it runs, so this is the one setting an edit alone does not apply:
+
+```bash
+FIREPLANNER_TIMES="07:00"          # comma-separated HH:MM, the Mac's local time
+FIREPLANNER_DAYS="daily"           # daily | weekdays
+```
+
+Any time is safe. A run only ever sees the last completed daily bar — a partial bar for a
+session still in progress is dropped rather than charted, verified for the pre-open,
+mid-session and after-close cases in `tests/test_system.py`. What the hour actually decides is
+**how long the page lags the close that produced it**:
+
+| Schedule | You see | Trade-off |
+|---|---|---|
+| `07:00` | yesterday's close, before the open | between yesterday's close and this morning's run the page is one session behind — an evening check shows the previous day |
+| `16:35` | today's close, 35 minutes after it | nothing to read with your morning coffee until you open the page and it is already 16 hours old |
+| `07:00,16:35` | both | two runs a day; the gateway has to be up for both |
+
+Weekend runs on a `daily` schedule are harmless — daily bars do not change, so Saturday's run
+rebuilds the same page from Friday's close.
 
 The runner is written for unattended operation, which mostly means refusing to do harm:
 
