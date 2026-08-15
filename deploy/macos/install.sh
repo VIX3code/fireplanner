@@ -36,16 +36,66 @@ fi
 say "repo      $REPO"
 
 # ---- python ---------------------------------------------------------------
+# 3.10 is a hard floor, and it is not this package's choice: every release of
+# ib_async — the library that opens the socket to TWS/IB Gateway — is published
+# as requires-python >=3.10. On 3.9 pip finds no candidate at all and reports it
+# as forty lines of rejected versions from every package in the tree, which
+# names neither the real requirement nor the fix. Hence the check here, before a
+# venv is built that could never work.
+MIN_MAJOR=3; MIN_MINOR=10
+
+py_ver() { "$1" -c 'import sys;print(".".join(map(str,sys.version_info[:3])))' 2>/dev/null; }
+py_ok() {
+  [ -x "$1" ] || command -v "$1" >/dev/null 2>&1 || return 1
+  "$1" -c "import sys;sys.exit(0 if sys.version_info[:2] >= ($MIN_MAJOR,$MIN_MINOR) else 1)" 2>/dev/null
+}
+
 PY="${PYTHON:-}"
-if [ -z "$PY" ]; then
-  for c in python3.12 python3.11 python3.10 python3.9 python3; do
-    if command -v "$c" >/dev/null 2>&1; then PY="$(command -v "$c")"; break; fi
+TOO_OLD=""
+if [ -n "$PY" ]; then
+  py_ok "$PY" || { TOO_OLD="$PY"; PY=""; }
+else
+  # Newest first, and a candidate that is too old does not stop the search:
+  # a Mac with 3.9 as `python3` and 3.12 alongside it should get 3.12.
+  for c in python3.13 python3.12 python3.11 python3.10 python3 python3.9; do
+    p="$(command -v "$c" 2>/dev/null)" || continue
+    if py_ok "$p"; then PY="$p"; break; fi
+    [ -n "$TOO_OLD" ] || TOO_OLD="$p"
   done
 fi
-[ -n "$PY" ] || { echo "error: no python3 found" >&2; exit 1; }
-say "python    $PY  ($("$PY" -c 'import sys;print(".".join(map(str,sys.version_info[:3])))'))"
+
+if [ -z "$PY" ]; then
+  {
+    if [ -n "$TOO_OLD" ]; then
+      echo "error: Python $(py_ver "$TOO_OLD") is too old — FirePlanner's IBKR"
+      echo "       connection needs $MIN_MAJOR.$MIN_MINOR or newer."
+      echo "       (found: $TOO_OLD)"
+    else
+      echo "error: no python3 found."
+    fi
+    echo
+    echo "  Install a newer Python, then re-run this script — it picks up the"
+    echo "  newest one it can find and rebuilds the virtualenv automatically."
+    echo
+    echo "    brew install python@3.12"
+    echo
+    echo "  or download the macOS installer from https://www.python.org/downloads/"
+    echo
+    echo "  Nothing else on your Mac changes: this installs a second Python"
+    echo "  alongside the one you have and uses it only for FirePlanner."
+  } >&2
+  exit 1
+fi
+say "python    $PY  ($(py_ver "$PY"))"
 
 # ---- venv -----------------------------------------------------------------
+# A venv built by an older interpreter keeps that interpreter forever, so an
+# upgrade would otherwise be invisible: you install 3.12, re-run this, and it
+# quietly reuses the 3.9 venv that failed in the first place.
+if [ -d "$VENV" ] && ! py_ok "$VENV/bin/python"; then
+  say "removing  $VENV (built with Python $(py_ver "$VENV/bin/python"), too old)"
+  rm -rf "$VENV"
+fi
 if [ ! -d "$VENV" ]; then
   say "creating  $VENV"
   "$PY" -m venv "$VENV"

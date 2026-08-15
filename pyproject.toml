@@ -6,9 +6,17 @@ build-backend = "setuptools.build_meta"
 name = "fireplanner"
 version = "0.1.0"
 description = "Swing/position trading research and monitoring stack for S&P 500 index and single names, wired to Interactive Brokers"
-# 3.9 is the floor because that is what ships as python3 on a stock macOS
-# install. The full suite is verified green on 3.9.23 / pandas 2.3.3.
-requires-python = ">=3.9"
+# 3.10 is the floor because every published release of ib_async — the library
+# that opens the socket to TWS/IB Gateway — is requires-python >=3.10, and
+# nobody installs this without the broker connection.
+#
+# The rest of the package genuinely does run on 3.9: the full suite is green on
+# 3.9.23 / pandas 2.3.3, because it exercises the model against committed
+# snapshots and never imports ib_async. That made 3.9 look supportable when it
+# was not. Declaring the real floor here means pip says so in one line instead
+# of failing later inside the extras resolution, where the message names every
+# rejected version in the tree and not the requirement that caused it.
+requires-python = ">=3.10"
 dependencies = [
     "pandas>=2.0",
     "numpy>=1.24",

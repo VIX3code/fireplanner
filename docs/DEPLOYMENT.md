@@ -260,9 +260,31 @@ rm ~/Library/LaunchAgents/com.fireplanner.publish.plist
 
 ### Python on macOS
 
-Stock macOS ships Python 3.9, so that is the supported floor — the full suite is verified
-green on 3.9.23 with pandas 2.3.3. `install.sh` prefers a newer interpreter if one is on
-PATH and falls back to `python3`.
+**You need Python 3.10 or newer, and macOS does not ship it.** Every published release of
+`ib_async` — the library that opens the socket to TWS/IB Gateway — is `requires-python
+>=3.10`, so on 3.9 there is no version to install at all:
+
+```
+ERROR: Could not find a version that satisfies the requirement ib_async>=1.0
+ERROR: No matching distribution found for ib_async>=1.0
+```
+
+`install.sh` now checks for this before building anything and tells you what to run. The fix:
+
+```bash
+brew install python@3.12          # or the installer from python.org/downloads
+./deploy/macos/install.sh         # picks up the newest it can find
+```
+
+This installs a second Python alongside your existing one and uses it only for FirePlanner.
+Re-running `install.sh` also **deletes and rebuilds a virtualenv built by a too-old
+interpreter** — a venv keeps whichever Python created it, so without that step upgrading would
+appear to change nothing.
+
+The rest of the package does run on 3.9: the suite is green on 3.9.23 with pandas 2.3.3,
+because it exercises the model against committed snapshots and never imports `ib_async`. That
+is exactly what made 3.9 look supportable when it was not — the tests cover the model, and the
+broker adapter is the part with the floor.
 
 ## Option B2 — systemd on a box that already runs IB Gateway
 
