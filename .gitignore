@@ -24,5 +24,6 @@ deploy/macos/fireplanner.env
 deploy/macos/fireplanner-venv/
 deploy/macos/fireplanner_site/
 deploy/macos/*.log
+deploy/macos/install.log
 deploy/macos/fireplanner.launchd.*
 site/

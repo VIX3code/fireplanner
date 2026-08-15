@@ -101,9 +101,42 @@ if [ ! -d "$VENV" ]; then
   "$PY" -m venv "$VENV"
 fi
 "$VENV/bin/python" -m pip install --quiet --upgrade pip
+
+# Full output to a file rather than --quiet to the void: when this fails, the
+# reason is in pip's output, and "installing... ERROR" with nothing to read is
+# the least useful thing this script could print.
+INSTALL_LOG="$HERE/install.log"
 say "installing fireplanner[gateway,cache]"
-"$VENV/bin/python" -m pip install --quiet -e "$REPO[gateway,cache]"
-say "installed  $("$VENV/bin/fireplanner" --help >/dev/null 2>&1 && echo ok || echo FAILED)"
+if ! "$VENV/bin/python" -m pip install -e "$REPO[gateway,cache]" > "$INSTALL_LOG" 2>&1; then
+  {
+    echo
+    echo "error: pip could not install the dependencies. Last 25 lines"
+    echo "       (full output in $INSTALL_LOG):"
+    echo
+    tail -25 "$INSTALL_LOG" | sed 's/^/    /'
+  } >&2
+  exit 1
+fi
+
+# Verify the two things that have to work, and name whichever does not. This
+# used to print FAILED and carry on to schedule a job that could never run.
+verify_fail() {
+  {
+    echo
+    echo "error: $1"
+    echo "       Full install output: $INSTALL_LOG"
+    echo "       Python: $("$VENV/bin/python" -V 2>&1) at $VENV/bin/python"
+  } >&2
+  exit 1
+}
+"$VENV/bin/python" -c "import fireplanner" 2>/dev/null \
+  || verify_fail "the fireplanner package did not import after installing."
+"$VENV/bin/python" -c "import ib_async" 2>/dev/null \
+  || verify_fail "ib_async is missing — the IBKR connection would not work.
+       This is the library that needs Python 3.10+."
+"$VENV/bin/fireplanner" --help >/dev/null 2>&1 \
+  || verify_fail "the 'fireplanner' command did not run after installing."
+say "installed  ok  (fireplanner + ib_async import cleanly)"
 
 # ---- config ---------------------------------------------------------------
 # Seeded once and never overwritten, so re-running install.sh cannot clobber a
