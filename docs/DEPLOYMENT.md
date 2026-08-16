@@ -281,9 +281,19 @@ ERROR: No matching distribution found for ib_async>=1.0
 `install.sh` now checks for this before building anything and tells you what to run. The fix:
 
 ```bash
-brew install python@3.12          # or the installer from python.org/downloads
+brew install python@3.12          # or the installer from python.org/downloads/macos/
 ./deploy/macos/install.sh         # picks up the newest it can find
 ```
+
+**3.12, 3.13 and 3.14 are all verified.** On 3.14 the dependency set resolves to pandas 3.0.5,
+numpy 2.5.2, pyarrow 25.0.1 and ib_async 2.1.0 — every one a pre-built wheel, nothing
+compiles — and the full suite passes, with the rendered page byte-identical to the 3.11 build.
+The only version worth avoiding is one released in the last month or two, before the scientific
+stack has published wheels for it; that is where you land in a source build wanting Xcode.
+
+`install.sh` discovers every `python3.N` on PATH and takes the newest that clears the floor,
+rather than consulting a hardcoded list — the list it originally shipped with stopped at 3.13,
+which would have missed a 3.14 install.
 
 This installs a second Python alongside your existing one and uses it only for FirePlanner.
 Re-running `install.sh` also **deletes and rebuilds a virtualenv built by a too-old

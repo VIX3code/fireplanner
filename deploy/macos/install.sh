@@ -50,14 +50,31 @@ py_ok() {
   "$1" -c "import sys;sys.exit(0 if sys.version_info[:2] >= ($MIN_MAJOR,$MIN_MINOR) else 1)" 2>/dev/null
 }
 
+# Every python3.N actually present on PATH, newest first. A hardcoded list goes
+# stale the moment a new Python ships — this shipped with one that stopped at
+# 3.13, and the first person to run it had installed 3.14. Bare `python3` goes
+# last, as the fallback for a PATH exposing no versioned names.
+py_candidates() {
+  (
+    IFS=:
+    for d in $PATH; do
+      [ -d "$d" ] || continue
+      for f in "$d"/python3.[0-9] "$d"/python3.[0-9][0-9]; do
+        [ -x "$f" ] && printf '%s\n' "${f##*/}"
+      done
+    done
+  ) | sort -u -t. -k2,2nr
+  printf 'python3\n'
+}
+
 PY="${PYTHON:-}"
 TOO_OLD=""
 if [ -n "$PY" ]; then
   py_ok "$PY" || { TOO_OLD="$PY"; PY=""; }
 else
-  # Newest first, and a candidate that is too old does not stop the search:
-  # a Mac with 3.9 as `python3` and 3.12 alongside it should get 3.12.
-  for c in python3.13 python3.12 python3.11 python3.10 python3 python3.9; do
+  # A candidate that is too old does not stop the search: a Mac with 3.9 as
+  # `python3` and 3.14 alongside it should get 3.14.
+  for c in $(py_candidates); do
     p="$(command -v "$c" 2>/dev/null)" || continue
     if py_ok "$p"; then PY="$p"; break; fi
     [ -n "$TOO_OLD" ] || TOO_OLD="$p"
@@ -88,13 +105,14 @@ if [ -z "$PY" ]; then
       echo "  You do not have Homebrew, so use the official installer:"
       echo
       echo "    1. Open https://www.python.org/downloads/macos/"
-      echo "    2. Under 'Stable Releases', pick the latest Python 3.12.x"
+      echo "    2. Under 'Stable Releases', pick any Python 3.12, 3.13 or 3.14"
       echo "    3. Download 'macOS 64-bit universal2 installer' (.pkg) and run it"
-      echo "    4. Open '/Applications/Python 3.12/Install Certificates.command'"
+      echo "    4. Open '/Applications/Python 3.XX/Install Certificates.command'"
       echo "       (one double-click — without it HTTPS from Python can fail)"
       echo
-      echo "  3.12 rather than the newest release on purpose: pandas and numpy"
-      echo "  ship ready-built wheels for it, so nothing has to compile."
+      echo "  All three are verified: pandas, numpy and pyarrow ship built"
+      echo "  wheels for each, so nothing compiles. The only version to avoid"
+      echo "  is one released in the last month or two, before its wheels exist."
     fi
     echo
     echo "  Nothing else on your Mac changes: this installs a second Python"
