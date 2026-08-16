@@ -160,6 +160,29 @@ def test_switching_layout_sweeps_the_old_files(payload, tmp_path):
     assert sorted(manifest["removed"]) == ["dashboard.html", "signal_desk.html"]
 
 
+def test_the_self_test_reaches_the_page_and_the_status_file(payload, tmp_path):
+    """It is a daily scorecard; it is no use if it only exists in memory."""
+    publish_site(payload, out_dir=tmp_path / "site", single=True, redact=True)
+    page = (tmp_path / "site" / "index.html").read_text()
+    assert "Has the signal been working?" in page
+    assert "Never leave the market" in page          # the baseline column
+
+    status = json.loads((tmp_path / "site" / "status.json").read_text())
+    st = status["selftest"]
+    assert st["latest"]["date"] == payload.decision["date"]
+    assert {w["label"] for w in st["windows"]} == {"1 week", "1 month"}
+    for window in st["windows"]:
+        assert window["baseline"]["graded"] > 0
+
+
+def test_the_scorecard_states_the_baseline_next_to_its_own_number(payload, tmp_path):
+    """A hit rate shown alone reads as skill. It must never appear alone."""
+    publish_site(payload, out_dir=tmp_path / "site", single=True, redact=True)
+    page = (tmp_path / "site" / "index.html").read_text()
+    assert "no daily directional edge" in page
+    assert "A hit rate below that is not skill" in page
+
+
 def test_status_json_records_the_layout(payload, tmp_path):
     publish_site(payload, out_dir=tmp_path / "site", single=True)
     status = json.loads((tmp_path / "site" / "status.json").read_text())

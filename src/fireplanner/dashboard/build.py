@@ -48,6 +48,9 @@ class DashboardPayload:
     staleness_days: int | None = None
     alloc_backtest: dict = field(default_factory=dict)
     alloc_buyhold: dict = field(default_factory=dict)
+    #: Daily grading of what the signal said against what the market then did.
+    #: Read-only by design — see signals/selftest.py.
+    selftest: object | None = None
     exposure_note: str = ""
     exposure_basis: dict = field(default_factory=dict)
     total_changes: int = 0
@@ -350,6 +353,14 @@ def add_decision(
     bh = buy_and_hold_stats(payload.bars[bench]["close"].reindex(bt.equity_curve.index).dropna())
     payload.alloc_backtest = bt.stats
     payload.alloc_buyhold = bh
+
+    # ---- daily self-test -------------------------------------------------
+    # Grades the signal against the sessions that followed it. Deliberately
+    # computed after everything else and consumed by nobody: it reports on the
+    # model, and must never become an input to it.
+    from ..signals.selftest import self_test
+
+    payload.selftest = self_test(payload.allocation, payload.ladder_steps)
 
     payload.reliability = {
         "changes_per_year": len(changes) / years,

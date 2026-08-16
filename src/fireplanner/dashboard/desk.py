@@ -108,6 +108,126 @@ def _check(passed: bool | None, label: str, detail: str) -> str:
     )
 
 
+def _rate(tally: dict) -> str:
+    """A hit rate with its sample size attached — 2/5 and 200/500 are not alike."""
+    if not tally.get("graded"):
+        return '<span class="muted-txt">no call</span>'
+    return (
+        f"<strong>{tally['hit_rate'] * 100:.0f}%</strong> "
+        f"<span class='muted-txt'>{tally['hits']}/{tally['graded']}</span>"
+    )
+
+
+def _verdict_cell(verdict: str) -> str:
+    if verdict == "hit":
+        return '<span class="pos">✓ right</span>'
+    if verdict == "miss":
+        return '<span class="neg">✕ wrong</span>'
+    return '<span class="muted-txt">no call</span>'
+
+
+def _selftest_card(st, bench: str) -> str:
+    """How the signal has actually been doing, graded daily against the close."""
+    neutral_pct = st.neutral * 100
+    lt = st.lifetime
+    latest = st.latest or {}
+
+    # ---- headline: yesterday's call --------------------------------------
+    if latest.get("ret") is None or latest.get("committed_verdict") == "—":
+        headline = "No directional call to grade in the latest session."
+    else:
+        move = latest["ret"] * 100
+        stance = "risk-off" if latest["committed_level"] < st.neutral else "risk-on"
+        right = latest["committed_verdict"] == "hit"
+        headline = (
+            f"Last session the target stood at <strong>{latest['committed_level'] * 100:.0f}%</strong> "
+            f"({stance}) and {html.escape(bench)} closed <strong>{move:+.2f}%</strong> — "
+            + ('<span class="pos">the lean was right</span>' if right
+               else '<span class="neg">the lean was wrong</span>') + "."
+        )
+
+    window_rows = [
+        [
+            w["label"],
+            f"{w['sessions']} sessions",
+            _rate(w["committed"]),
+            _rate(w["raw"]),
+            _rate(w["baseline"]),
+        ]
+        for w in st.windows
+    ]
+    window_rows.append([
+        "<strong>Since 2022</strong>",
+        f"{lt['sessions']} sessions",
+        _rate(lt["committed"]),
+        _rate(lt["raw"]),
+        _rate(lt["baseline"]),
+    ])
+
+    daily = st.daily.tail(21)
+    day_rows = [
+        [
+            idx.strftime("%a %d %b"),
+            fmt(row["close"], 2),
+            _sign(float(row["ret"]) * 100) if pd.notna(row["ret"]) else "—",
+            "—" if pd.isna(row["committed_level"]) else f"{row['committed_level'] * 100:.0f}%",
+            _verdict_cell(str(row["committed_verdict"])),
+            "—" if pd.isna(row["raw_level"]) else f"{row['raw_level'] * 100:.0f}%",
+            _verdict_cell(str(row["raw_verdict"])),
+        ]
+        for idx, row in daily[::-1].iterrows()
+    ]
+
+    hit_move = lt["committed"]["avg_hit_move"]
+    miss_move = lt["committed"]["avg_miss_move"]
+    beats = (lt["committed"]["hit_rate"] or 0) > (lt["baseline"]["hit_rate"] or 0)
+
+    return f"""
+<section class="card">
+  <h2>Has the signal been working?</h2>
+  <p class="lede">Every session, the target that was standing at the <em>previous</em> close is
+     graded against what {html.escape(bench)} actually did. Above
+     {neutral_pct:.0f}% counts as leaning risk-on, below it as leaning risk-off, and exactly
+     {neutral_pct:.0f}% as no call — so a day is &ldquo;right&rdquo; when the lean and the move agreed.</p>
+
+  <p class="selftest-headline">{headline}</p>
+
+  {_table(["Window", "", "Committed target", "Raw signal", "Never leave the market"],
+          window_rows, "data")}
+
+  <div class="verdict" style="margin-top:18px">
+    <h3>What this does and does not tell you</h3>
+    <ul>
+      <li><strong>Read every number against the last column.</strong> Staying fully invested and
+          having no view at all is right {lt['baseline']['hit_rate'] * 100:.0f}% of days, because
+          {html.escape(bench)} rises more often than it falls. A hit rate below that is not skill.</li>
+      <li><strong>Over {lt['committed']['graded']} graded sessions the committed target is right
+          {lt['committed']['hit_rate'] * 100:.0f}% of the time</strong> — {'above' if beats else 'below'}
+          the {lt['baseline']['hit_rate'] * 100:.0f}% you get by never having a view.
+          On this measure the model has no daily directional edge.</li>
+      <li><strong>And there is no asymmetry hiding underneath it.</strong> Sessions it got right
+          moved {hit_move * 100:.2f}% on average, sessions it got wrong {miss_move * 100:.2f}% —
+          near enough the same, so it is not being wrong cheaply and right expensively.</li>
+      <li><strong>This is the wrong scoreboard for this model, and it is here anyway.</strong>
+          It sizes exposure across regimes; it never claimed to call sessions. Its edge is
+          risk-adjusted — Sharpe 1.18 against 0.98 for buy-and-hold, with a shallower drawdown —
+          which a count of up days cannot see. Judge it on the drawdown table above.</li>
+      <li><strong>Nothing here feeds back into the model.</strong> A week is five observations and
+          a month twenty-one; tuning on that would fit noise and make the live signal worse.
+          This panel reports, and that is all it does.</li>
+    </ul>
+  </div>
+
+  <h3 style="margin-top:20px">Session by session, most recent first</h3>
+  {_table([ "Date", f"{bench} close", "Move", "Target held", "Verdict", "Raw signal", "Verdict"],
+          day_rows, "data")}
+  <p class="muted-txt" style="margin-top:10px">&ldquo;Target held&rdquo; is the level standing at the
+     previous close — the one you could have acted on. The raw signal is what the model read that
+     day before smoothing and the cooldown; where the two verdicts differ, that is the damping
+     showing its cost or its worth.</p>
+</section>"""
+
+
 def stale_banner(bars_through: str, staleness_days: int | None) -> str:
     """The "these bars have aged" banner, filled in by the reader's clock.
 
@@ -423,6 +543,10 @@ def desk_sections(p, title: str = "S&P 500 Signal Desk", chrome: bool = True) ->
 </section>"""
         )
 
+    # ---------------------------------------------------------------- self-test
+    if getattr(p, "selftest", None) is not None and not p.selftest.daily.empty:
+        sections.append(_selftest_card(p.selftest, bench))
+
     # ---------------------------------------------------------------- history chart
     if alloc is not None and not alloc.empty:
         win = alloc.dropna(subset=["target"]).tail(504)
@@ -505,6 +629,9 @@ _DESK_CSS = """
 .basis { font-size: 12px; color: var(--text-secondary); margin: 10px 0 0; }
 .banner-card { border-left: 3px solid var(--status-warning); }
 .warn-txt { color: var(--status-critical); font-weight: 600; }
+.selftest-headline { font-size: 14.5px; padding: 12px 14px; border-radius: 8px;
+                     background: var(--page); border: 1px solid var(--border);
+                     margin: 0 0 16px; line-height: 1.55; }
 
 @media (max-width: 480px) {
   /* 38px puts a four-word instruction on three lines on a phone. */

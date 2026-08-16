@@ -204,6 +204,18 @@ def publish_site(
         },
         "reliability": source.reliability,
     }
+
+    # The self-test, machine-readable: percentages and hit counts only, so it
+    # carries nothing an account could be identified from and rides along in a
+    # redacted build unchanged.
+    st = getattr(source, "selftest", None)
+    if st is not None:
+        summary["selftest"] = {
+            "neutral": st.neutral,
+            "latest": st.latest,
+            "windows": st.windows,
+            "lifetime": st.lifetime,
+        }
     (out / "status.json").write_text(json.dumps(summary, indent=2, default=str))
     written["status.json"] = len(json.dumps(summary))
 
