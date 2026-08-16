@@ -32,12 +32,19 @@ RSYNC_TARGET="${FIREPLANNER_RSYNC_TARGET:-}"   # e.g. me@host:/var/www/fireplann
 NETLIFY_SITE="${FIREPLANNER_NETLIFY_SITE:-}"   # Netlify site ID, with NETLIFY_AUTH_TOKEN
 PUBLISH_CMD="${FIREPLANNER_PUBLISH_CMD:-}"     # anything else; receives $OUT as $1
 
-log() { echo "[$(date '+%Y-%m-%d %H:%M:%S')] $*" >> "$LOG"; }
+# Run by launchd, everything goes to the log. Run by hand, say it out loud as
+# well — a script that prints nothing for thirty seconds and then exits 0 is
+# indistinguishable from one that did nothing.
+log() {
+  line="[$(date '+%Y-%m-%d %H:%M:%S')] $*"
+  echo "$line" >> "$LOG"
+  if [ -t 1 ]; then echo "$line"; fi
+}
 
 log "----- run start (port $IB_PORT) -----"
 
 if [ ! -x "$VENV/bin/fireplanner" ]; then
-  log "ABORT: no venv at $VENV — run install.sh first"
+  log "ABORT: no venv at $VENV — install.sh has not completed successfully yet"
   exit 0
 fi
 

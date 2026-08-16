@@ -144,12 +144,21 @@ cp deploy/macos/{run_fireplanner.sh,install.sh,com.fireplanner.publish.plist} \
 FIREPLANNER_REPO=~/fireplanner IB_PORT=4001 ~/Claude/Scheduled/install.sh
 ```
 
-Test it immediately rather than waiting for the schedule:
+Test it immediately rather than waiting for the schedule. Run the runner directly and it
+prints its progress to the terminal instead of only to the log:
+
+```bash
+./deploy/macos/run_fireplanner.sh
+open deploy/macos/fireplanner_site/index.html
+```
+
+This is the same script launchd runs, reading the same `fireplanner.env`, so what you see by
+hand is exactly what happens at 07:00 — no second command with its own copy of the settings to
+drift out of step. To exercise the launchd path itself:
 
 ```bash
 launchctl kickstart -p gui/$UID/com.fireplanner.publish
-tail -f ~/Claude/Scheduled/fireplanner.log
-open ~/Claude/Scheduled/fireplanner_site/index.html
+tail -f deploy/macos/fireplanner.log
 ```
 
 **It runs at 07:00 local, every day**, which is a pre-open read: the newest *complete* daily
