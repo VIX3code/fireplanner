@@ -1,0 +1,420 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Presentation Timer</title>
+<style>
+  :root{
+    --bg:#0a0a0b; --panel:#141417; --line:#26262b; --ink:#f4f4f5;
+    --muted:#8b8b93; --accent:#4da3ff; --warn:#ffb020; --over:#ff4d4d;
+    --digits: var(--ink);
+  }
+  *{box-sizing:border-box}
+  html,body{height:100%}
+  body{
+    margin:0; background:var(--bg); color:var(--ink);
+    font:16px/1.45 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+    display:flex; flex-direction:column; overflow:hidden;
+  }
+
+  /* ---------- stage ---------- */
+  #stage{
+    flex:1 1 auto; display:flex; flex-direction:column;
+    align-items:center; justify-content:center; gap:2vh;
+    min-height:0; padding:2vh 3vw; text-align:center; user-select:none;
+  }
+  #label{
+    font-size:clamp(16px,3.4vh,40px); letter-spacing:.14em; text-transform:uppercase;
+    color:var(--muted); font-weight:600; min-height:1.2em; max-width:90vw;
+    overflow:hidden; text-overflow:ellipsis; white-space:nowrap;
+  }
+  #digits{
+    font-family:ui-monospace,SFMono-Regular,"SF Mono",Menlo,Consolas,"Liberation Mono",monospace;
+    font-variant-numeric:tabular-nums; font-weight:700; letter-spacing:-.02em;
+    font-size:min(26vw,58vh); line-height:.95; color:var(--digits);
+    transition:color .25s ease;
+  }
+  #sub{ font-size:clamp(13px,2.2vh,24px); color:var(--muted); min-height:1.4em }
+  body.warn{ --digits:var(--warn) }
+  body.over{ --digits:var(--over) }
+  body.over #digits{ animation:pulse 1.6s ease-in-out infinite }
+  @keyframes pulse{ 0%,100%{opacity:1} 50%{opacity:.45} }
+
+  /* ---------- progress ---------- */
+  #bar{ height:6px; background:#1c1c20; flex:0 0 auto }
+  #fill{ height:100%; width:0%; background:var(--accent); transition:width .2s linear }
+  body.warn #fill{ background:var(--warn) }
+  body.over #fill{ background:var(--over) }
+
+  /* ---------- controls ---------- */
+  #panel{
+    flex:0 0 auto; background:var(--panel); border-top:1px solid var(--line);
+    padding:14px 18px; display:flex; flex-wrap:wrap; gap:14px 22px; align-items:flex-end;
+    justify-content:center; overflow:hidden;
+    transition:opacity .25s ease, height .3s ease, padding .3s ease;
+  }
+  .grp{ display:flex; flex-direction:column; gap:6px }
+  .grp>span{ font-size:11px; letter-spacing:.1em; text-transform:uppercase; color:var(--muted) }
+  .row{ display:flex; gap:8px; align-items:center; flex-wrap:wrap }
+  input[type=number],input[type=time],input[type=text]{
+    background:#0e0e11; color:var(--ink); border:1px solid var(--line); border-radius:8px;
+    padding:9px 11px; font:inherit; font-size:15px;
+  }
+  input[type=number]{ width:84px }
+  input[type=text]{ width:210px }
+  input:focus{ outline:2px solid var(--accent); outline-offset:1px }
+  button{
+    background:#1e1e23; color:var(--ink); border:1px solid var(--line); border-radius:8px;
+    padding:9px 14px; font:inherit; font-size:15px; cursor:pointer; white-space:nowrap;
+  }
+  button:hover{ background:#2a2a31 }
+  button.primary{ background:var(--accent); border-color:var(--accent); color:#04182e; font-weight:700; min-width:104px }
+  button.primary:hover{ filter:brightness(1.08) }
+  button.on{ background:var(--accent); border-color:var(--accent); color:#04182e; font-weight:600 }
+  .preset{ padding:8px 11px; font-size:14px }
+  .tabs{ display:inline-flex; background:#0e0e11; border:1px solid var(--line); border-radius:8px; padding:3px }
+  .tabs button{ border:0; background:transparent; padding:7px 13px; border-radius:6px; font-size:14px }
+  .tabs button.on{ background:var(--accent); color:#04182e; font-weight:700 }
+  #hint{ width:100%; text-align:center; font-size:12px; color:var(--muted) }
+  kbd{ background:#0e0e11; border:1px solid var(--line); border-bottom-width:2px;
+       border-radius:4px; padding:1px 5px; font:inherit; font-size:11px }
+  .hidden{ display:none !important }
+  /* hiding the controls hands the whole screen to the digits */
+  body.clean #panel{ opacity:0; pointer-events:none; height:0; padding-top:0; padding-bottom:0; border-top-width:0 }
+  body.clean{ cursor:none }
+</style>
+</head>
+<body>
+
+<div id="stage">
+  <div id="label"></div>
+  <div id="digits">05:00</div>
+  <div id="sub"></div>
+</div>
+
+<div id="bar"><div id="fill"></div></div>
+
+<div id="panel">
+  <div class="grp">
+    <span>Mode</span>
+    <div class="tabs">
+      <button id="tabDur" class="on">Duration</button>
+      <button id="tabEnd">End at time</button>
+    </div>
+  </div>
+
+  <div class="grp" id="durGrp">
+    <span>Minutes / seconds</span>
+    <div class="row">
+      <input id="mins" type="number" min="0" max="600" step="1" value="5" aria-label="Minutes">
+      <input id="secs" type="number" min="0" max="59" step="1" value="0" aria-label="Seconds">
+      <button class="preset" data-min="1">1</button>
+      <button class="preset" data-min="2">2</button>
+      <button class="preset" data-min="5">5</button>
+      <button class="preset" data-min="10">10</button>
+      <button class="preset" data-min="15">15</button>
+      <button class="preset" data-min="30">30</button>
+    </div>
+  </div>
+
+  <div class="grp hidden" id="endGrp">
+    <span>Resume at</span>
+    <div class="row">
+      <input id="endTime" type="time" step="60">
+      <button id="plus5">+5 min</button>
+      <button id="plus15">+15 min</button>
+    </div>
+  </div>
+
+  <div class="grp">
+    <span>Label on screen</span>
+    <div class="row">
+      <input id="labelIn" type="text" placeholder="e.g. Coffee break" maxlength="48">
+    </div>
+  </div>
+
+  <div class="grp">
+    <span>Run</span>
+    <div class="row">
+      <button id="startBtn" class="primary">Start</button>
+      <button id="resetBtn">Reset</button>
+      <button id="add60">+1 min</button>
+      <button id="sub60">&minus;1 min</button>
+      <button id="soundBtn" class="on">Sound on</button>
+      <button id="fsBtn">Fullscreen</button>
+    </div>
+  </div>
+
+  <div id="hint">
+    <kbd>Space</kbd> start / pause &nbsp;·&nbsp; <kbd>R</kbd> reset &nbsp;·&nbsp;
+    <kbd>F</kbd> fullscreen &nbsp;·&nbsp; <kbd>&uarr;</kbd><kbd>&darr;</kbd> &plusmn;1 min &nbsp;·&nbsp;
+    <kbd>M</kbd> mute &nbsp;·&nbsp; <kbd>H</kbd> hide controls
+    &nbsp;·&nbsp; works with no internet
+  </div>
+</div>
+
+<script>
+(function(){
+  "use strict";
+
+  var $ = function(id){ return document.getElementById(id); };
+  var digits=$("digits"), sub=$("sub"), labelEl=$("label"), fill=$("fill");
+  var mins=$("mins"), secs=$("secs"), endTime=$("endTime"), labelIn=$("labelIn");
+  var startBtn=$("startBtn"), soundBtn=$("soundBtn");
+
+  var mode="dur";            // "dur" | "end"
+  var totalMs=5*60*1000;     // full length, for the progress bar
+  var remainMs=totalMs;      // frozen remainder while paused
+  var deadline=0;            // wall-clock ms when running
+  var running=false;
+  var soundOn=true, chimed=false, wakeLock=null;
+
+  /* ---------- persistence (optional; file:// may block it) ---------- */
+  function save(){
+    try{
+      localStorage.setItem("presTimer", JSON.stringify({
+        m:mins.value, s:secs.value, label:labelIn.value, sound:soundOn
+      }));
+    }catch(e){}
+  }
+  function load(){
+    try{
+      var v = JSON.parse(localStorage.getItem("presTimer")||"{}");
+      if(v.m!=null) mins.value=v.m;
+      if(v.s!=null) secs.value=v.s;
+      if(v.label) labelIn.value=v.label;
+      if(v.sound===false){ soundOn=false; soundBtn.classList.remove("on"); soundBtn.textContent="Sound off"; }
+    }catch(e){}
+  }
+
+  /* ---------- formatting ---------- */
+  function fmt(ms){
+    // count down on the ceiling (5:00 shows the instant you start) and
+    // overtime on the floor (00:00 holds for a second before −00:01)
+    var t = ms > 0 ? Math.ceil(ms/1000) : Math.floor(-ms/1000);
+    var neg = ms <= 0 && t > 0;
+    var h = Math.floor(t/3600), m = Math.floor(t%3600/60), s = t%60;
+    var p = function(n){ return n<10 ? "0"+n : ""+n; };
+    return (neg?"−":"") + (h>0 ? h+":"+p(m)+":"+p(s) : p(m)+":"+p(s));
+  }
+  function clockOf(ts){
+    var d = new Date(ts);
+    return ("0"+d.getHours()).slice(-2)+":"+("0"+d.getMinutes()).slice(-2);
+  }
+
+  /* ---------- sound: synthesised, so the file stays self-contained ---------- */
+  var ac=null;
+  function beep(){
+    if(!soundOn) return;
+    try{
+      if(!ac) ac = new (window.AudioContext||window.webkitAudioContext)();
+      if(ac.state==="suspended") ac.resume();
+      [0,0.45,0.90].forEach(function(off){
+        var o=ac.createOscillator(), g=ac.createGain(), t=ac.currentTime+off;
+        o.type="sine"; o.frequency.setValueAtTime(880,t);
+        g.gain.setValueAtTime(0.0001,t);
+        g.gain.exponentialRampToValueAtTime(0.35,t+0.02);
+        g.gain.exponentialRampToValueAtTime(0.0001,t+0.34);
+        o.connect(g); g.connect(ac.destination); o.start(t); o.stop(t+0.36);
+      });
+    }catch(e){}
+  }
+
+  /* ---------- keep the laptop screen awake while counting ---------- */
+  function requestWake(){
+    try{
+      if(navigator.wakeLock && !wakeLock){
+        navigator.wakeLock.request("screen").then(function(l){
+          wakeLock=l; l.addEventListener("release",function(){ wakeLock=null; });
+        }).catch(function(){});
+      }
+    }catch(e){}
+  }
+  function releaseWake(){ try{ if(wakeLock){ wakeLock.release(); wakeLock=null; } }catch(e){} }
+
+  /* ---------- reading the inputs ---------- */
+  function durationFromInputs(){
+    var m = Math.max(0, Math.min(600, parseInt(mins.value,10)||0));
+    var s = Math.max(0, Math.min(59,  parseInt(secs.value,10)||0));
+    return (m*60+s)*1000;
+  }
+  function msUntilClockTime(){
+    var v = endTime.value;
+    if(!v) return 0;
+    var parts = v.split(":");
+    var t = new Date();
+    t.setHours(parseInt(parts[0],10), parseInt(parts[1],10), 0, 0);
+    var d = t - Date.now();
+    if(d <= 0) d += 24*3600*1000;              // a time already past means tomorrow
+    return d;
+  }
+  function armFromInputs(){
+    remainMs = (mode==="dur") ? durationFromInputs() : msUntilClockTime();
+    totalMs  = remainMs > 0 ? remainMs : 1;
+    chimed = false;
+    render();
+  }
+
+  /* ---------- render ---------- */
+  function currentRemain(){ return running ? deadline - Date.now() : remainMs; }
+
+  function render(){
+    var r = currentRemain();
+    digits.textContent = fmt(r);
+
+    document.body.classList.toggle("over", r <= 0);
+    document.body.classList.toggle("warn", r > 0 && r <= 60000);
+
+    var pct = totalMs > 0 ? Math.max(0, Math.min(100, (r/totalMs)*100)) : 0;
+    fill.style.width = (r <= 0 ? 100 : pct) + "%";
+
+    labelEl.textContent = labelIn.value.trim();
+
+    if(r <= 0){
+      sub.textContent = running ? "Time is up — running over" : "Time is up";
+    }else if(running){
+      sub.textContent = "Ends at " + clockOf(Date.now() + r);
+    }else if(mode==="end" && endTime.value){
+      sub.textContent = "Resumes at " + endTime.value;
+    }else{
+      sub.textContent = remainMs === totalMs ? "Ready" : "Paused";
+    }
+
+    document.title = (running ? fmt(r)+" · " : "") + "Presentation Timer";
+
+    if(running && r <= 0 && !chimed){ chimed = true; beep(); }
+  }
+
+  /* ---------- transport ---------- */
+  function start(){
+    if(running) return;
+    if(remainMs <= 0) armFromInputs();
+    if(remainMs <= 0) return;
+    deadline = Date.now() + remainMs;
+    running = true;
+    startBtn.textContent = "Pause";
+    wake();
+    if(!ac){ try{ ac = new (window.AudioContext||window.webkitAudioContext)(); }catch(e){} }
+    requestWake();
+    render();
+  }
+  function pause(){
+    if(!running) return;
+    remainMs = deadline - Date.now();
+    running = false;
+    startBtn.textContent = "Resume";
+    releaseWake();
+    wake();
+    render();
+  }
+  function toggle(){ running ? pause() : start(); }
+  function reset(){
+    running = false;
+    startBtn.textContent = "Start";
+    releaseWake();
+    armFromInputs();
+  }
+  function nudge(ms){
+    if(running){ deadline += ms; totalMs = Math.max(totalMs, deadline - Date.now()); }
+    else{ remainMs = Math.max(0, remainMs + ms); totalMs = Math.max(totalMs, remainMs); }
+    if(currentRemain() > 0) chimed = false;
+    render();
+  }
+
+  /* ---------- wiring ---------- */
+  startBtn.onclick = toggle;
+  $("resetBtn").onclick = reset;
+  $("add60").onclick = function(){ nudge(60000); };
+  $("sub60").onclick = function(){ nudge(-60000); };
+
+  $("tabDur").onclick = function(){
+    mode="dur"; this.classList.add("on"); $("tabEnd").classList.remove("on");
+    $("durGrp").classList.remove("hidden"); $("endGrp").classList.add("hidden");
+    reset();
+  };
+  $("tabEnd").onclick = function(){
+    mode="end"; this.classList.add("on"); $("tabDur").classList.remove("on");
+    $("endGrp").classList.remove("hidden"); $("durGrp").classList.add("hidden");
+    if(!endTime.value) setEndIn(10);
+    reset();
+  };
+  function setEndIn(m){
+    var t = new Date(Date.now() + m*60000);
+    t.setSeconds(0,0);
+    endTime.value = ("0"+t.getHours()).slice(-2)+":"+("0"+t.getMinutes()).slice(-2);
+  }
+  $("plus5").onclick  = function(){ setEndIn(5);  reset(); };
+  $("plus15").onclick = function(){ setEndIn(15); reset(); };
+
+  Array.prototype.forEach.call(document.querySelectorAll(".preset"), function(b){
+    b.onclick = function(){
+      mins.value = b.dataset.min; secs.value = 0;
+      if(mode!=="dur") $("tabDur").onclick.call($("tabDur"));
+      else reset();
+      save();
+    };
+  });
+
+  [mins,secs,endTime].forEach(function(el){
+    el.addEventListener("change", function(){ if(!running) reset(); save(); });
+  });
+  labelIn.addEventListener("input", function(){ render(); save(); });
+
+  soundBtn.onclick = function(){
+    soundOn = !soundOn;
+    soundBtn.classList.toggle("on", soundOn);
+    soundBtn.textContent = soundOn ? "Sound on" : "Sound off";
+    if(soundOn) beep();
+    save();
+  };
+
+  function fullscreen(){
+    if(document.fullscreenElement) document.exitFullscreen();
+    else if(document.documentElement.requestFullscreen) document.documentElement.requestFullscreen();
+  }
+  $("fsBtn").onclick = fullscreen;
+
+  /* clicking the digits is the fat-finger-proof start/pause on a touchscreen */
+  $("stage").onclick = toggle;
+
+  document.addEventListener("keydown", function(e){
+    if(/^(INPUT|TEXTAREA)$/.test(e.target.tagName)){
+      if(e.key === "Enter") e.target.blur();
+      return;
+    }
+    wake();
+    var k = e.key.toLowerCase();
+    if(e.code === "Space" || k === "enter"){ e.preventDefault(); toggle(); }
+    else if(k === "r"){ reset(); }
+    else if(k === "f"){ fullscreen(); }
+    else if(k === "m"){ soundBtn.click(); }
+    else if(k === "h"){ document.body.classList.toggle("clean"); }
+    else if(e.key === "ArrowUp"){ e.preventDefault(); nudge(60000); }
+    else if(e.key === "ArrowDown"){ e.preventDefault(); nudge(-60000); }
+  });
+
+  /* auto-hide the panel while running, bring it back on any mouse move */
+  var idle;
+  function wake(){
+    document.body.classList.remove("clean");
+    clearTimeout(idle);
+    if(running) idle = setTimeout(function(){ document.body.classList.add("clean"); }, 4000);
+  }
+  document.addEventListener("mousemove", wake);
+  document.addEventListener("touchstart", wake);
+
+  /* a screen that slept mid-count reopens on the right number: everything
+     is derived from the wall clock, so we only need to redraw. */
+  document.addEventListener("visibilitychange", function(){
+    if(!document.hidden){ requestWake(); render(); }
+  });
+
+  load();
+  setEndIn(10);
+  armFromInputs();
+  setInterval(render, 200);
+})();
+</script>
+</body>
+</html>
