@@ -63,12 +63,28 @@ GIF for the parts you control.
 
 ## countdown-gifs/
 
-`countdown-5min.gif`, `countdown-10min.gif`, `countdown-15min.gif` — for the
-case where the timer really does have to live on the slide, which on a single
-mirrored projector is often the honest answer. 1000x420, dark panel, white
-digits that turn amber for the final minute and red at zero. No loop block is
-written, so each one plays once and rests on 00:00 rather than silently
-restarting behind you.
+Six files: 5, 10 and 15 minutes, each in a dark and a light version, for the
+case where the timer really does have to live on the slide — which on a single
+mirrored projector is often the honest answer.
+
+| | Slide template |
+| --- | --- |
+| `countdown-Nmin.gif` | dark, or a photo background |
+| `countdown-Nmin-light.gif` | white or near-white |
+
+Both are 1000x420 with digits that turn amber for the final minute and red at
+zero. The light version's amber and red are darker than the dark version's:
+a bright amber that reads well on black turns to pale nothing on white under
+a tired projector lamp.
+
+The panel is opaque rather than transparent, so on an off-white or textured
+template you will see its edge — the dark version is usually the better
+answer there. GIF has a single transparent index and no per-pixel alpha, and
+a transparent pixel in a delta frame means "keep what was underneath", which
+would leave every previous digit ghosting under the current one.
+
+No loop block is written, so each one plays once and rests on 00:00 rather
+than silently restarting behind you.
 
 Insert with **Insert > Pictures > This Device**. The animation runs in Slide
 Show view only (it sits still while you edit), and it starts the moment the
@@ -86,7 +102,7 @@ playback is not frame-accurate and can drift a second or two over fifteen
 minutes — close enough for a workshop, not for anything formally timed. And
 the GIF is silent.
 
-Regenerate, or make other lengths, with:
+Regenerate, or make other lengths, with (both themes are written each time):
 
     pip install Pillow
     python3 tools/make_countdown_gifs.py 3 7 20
