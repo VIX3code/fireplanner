@@ -38,3 +38,28 @@ inside the deck. PowerPoint has no native countdown — Presenter View's clock
 counts up, and the only genuinely offline in-slide options are an animated GIF
 or an inserted video, both of which are fixed-length and cannot be paused or
 extended once a client question runs long.
+
+## countdown-gifs/
+
+`countdown-5min.gif`, `countdown-10min.gif`, `countdown-15min.gif` — for the
+case where the timer really does have to live on the slide. 1000x420, dark
+panel, white digits that turn amber for the final minute and red at zero.
+No loop block is written, so each one plays once and rests on 00:00 rather
+than silently restarting behind you.
+
+Insert with **Insert > Pictures > This Device**. The animation runs in Slide
+Show view only (it sits still while you edit), and it starts the moment the
+slide appears — there is no play, pause, or reset. So use a GIF for a segment
+whose length you control and skip to the next slide to end it early; use the
+browser timer above for anything a client question might stretch.
+
+Two caveats worth knowing before you rely on one in front of a room.
+PowerPoint's GIF playback is not frame-accurate and can drift a second or two
+over fifteen minutes — close enough for a coffee break, not for anything
+being formally timed. And if you need the room to *hear* the end, the GIF is
+silent: put a sound on the slide transition, or use the browser timer.
+
+Regenerate, or make other lengths, with:
+
+    pip install Pillow
+    python3 tools/make_countdown_gifs.py 3 7 20
