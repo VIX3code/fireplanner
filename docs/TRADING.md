@@ -258,6 +258,30 @@ With a token set, every API call needs it, and the page carries no data until it
 watchlist from TWS (right-click → *Export page content*) and `trade watch import` the file, or
 add tickers on the dashboard. `trading.watchlist` in the config seeds it on first run.
 
+## Hosting a copy
+
+Both commands write one self-contained HTML file (inline styles and script, no outside
+requests), so it works on any static host or straight from the disk:
+
+```bash
+fireplanner trade demo -o site/swing-desk/index.html       # the simulated demo book
+fireplanner trade snapshot -o site/swing-desk/index.html   # YOUR book, read from the running dashboard
+```
+
+A hosted page is a **snapshot**: it shows the book as it was when written, and its buttons are
+off. For a copy that stays current, run `trade snapshot` on a schedule (every 5 minutes, say)
+and upload the file. `deploy/macos` and `deploy/fireplanner.timer` show the pattern, and
+`--direct` reads IBKR itself when the dashboard isn't running (give it a
+`--trade-client-id` the guardian isn't using).
+
+**Your snapshot shows your positions, sizes and P/L, so never host it publicly.** Put it behind
+a password: the Caddy basic-auth setup in `deploy/`, Netlify or Cloudflare Pages with access
+control, or a private GitHub Pages site. The page also asks search engines not to index it.
+The demo page carries a notice that its data is simulated, and is safe to share.
+
+To *trade* from a phone, host the live dashboard instead: `trade run` behind Caddy with TLS, a
+password and `FIREPLANNER_DASH_TOKEN` (see Dashboard above).
+
 ## Alerts
 
 With `TELEGRAM_BOT_TOKEN` and `TELEGRAM_CHAT_ID` set (see the README's Telegram section), you

@@ -948,3 +948,32 @@ def test_demo_weather_blends_breadth(demo):
     assert w["TSEJ"]["breadth"]["pct50"] < 0.4 and w["TSEJ"]["label"] == "Defensive"
     assert w["US"]["breadth"]["score"] > 0.6 and w["US"]["label"] == "Risk-On"
     assert all(x["breadth"]["counted"] == x["breadth"]["basket"] for x in w.values())
+
+
+# ---------------------------------------------------------------- hosting
+
+def test_a_snapshot_of_the_running_dashboard_is_one_static_file(tmp_path):
+    from fireplanner.cli import main
+    from fireplanner.trading.server import make_server
+    broker, journal, svc = make()
+    nv = broker.add(us(), 190.0, 0.036)
+    buy(broker, svc, nv, 190.0)
+    httpd = make_server(svc, "127.0.0.1", 0)
+    threading.Thread(target=httpd.serve_forever, daemon=True).start()
+    out = tmp_path / "site" / "index.html"
+    try:
+        assert main(["trade", "snapshot", "--url", f"http://127.0.0.1:{httpd.server_address[1]}",
+                     "-o", str(out)]) == 0
+    finally:
+        httpd.shutdown()
+    page = out.read_text()
+    assert "const LIVE = false;" in page and '"NVDA:US"' in page
+    assert 'content="noindex, nofollow"' in page
+    assert "http://" not in page.split("<script>")[0] and "<link" not in page     # nothing loaded from elsewhere
+
+
+def test_the_demo_page_says_it_is_simulated(demo):
+    from fireplanner.trading.server import render_dashboard
+    _, state = demo
+    page = render_dashboard(state)
+    assert state["mode"] == "sim" and "every position, price, date and index series on this page is simulated" in page

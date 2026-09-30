@@ -358,6 +358,7 @@ Singapore and Tokyo listings:
 ```bash
 fireplanner trade demo -o swing_desk.html      # try it on a simulated book, no IBKR needed
 fireplanner --port 4002 trade run              # paper account; dry run until trading.enabled: true
+fireplanner trade snapshot -o site/swing-desk/index.html   # one HTML file of your book, to host privately
 ```
 
 It starts in dry run on a paper account and refuses live ports until you opt in. Setup, the
@@ -439,14 +440,14 @@ src/fireplanner/
                  earnings.py earnings dates; stats.py the journal graded in R
                  service.py the loop; server.py the live dashboard
                  sim.py     in-memory broker; ib_broker.py TWS / IB Gateway
-tests/           217 tests
+tests/           219 tests
 data/snapshots/  real IBKR pulls: SPY, VIX, RSP, NVDA, ZS, MP, FTNT + account state
 ```
 
 ## Correctness
 
 ```bash
-PYTHONPATH=src python3 -m pytest tests/ -q      # 217 passed
+PYTHONPATH=src python3 -m pytest tests/ -q      # 219 passed
 ```
 
 The tests that matter most:

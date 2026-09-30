@@ -151,6 +151,19 @@ def make_server(service, host: str = "127.0.0.1", port: int = 8765, token: str =
     return ThreadingHTTPServer((host, port), Handler)
 
 
+def fetch_state(url: str, token: str = "", timeout: float = 15.0) -> dict:
+    """The current snapshot from a running dashboard (``trade run``)."""
+    import urllib.request
+
+    req = urllib.request.Request(url.rstrip("/") + "/api/state",
+                                 headers={"Authorization": f"Bearer {token}"} if token else {})
+    with urllib.request.urlopen(req, timeout=timeout) as r:
+        state = json.loads(r.read())
+    if not state.get("rules"):
+        raise RuntimeError("the dashboard answered, but has no snapshot yet; wait for its first cycle")
+    return state
+
+
 def journal_csv(journal) -> str:
     import csv
     import io

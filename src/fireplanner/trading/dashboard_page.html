@@ -3,6 +3,8 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="robots" content="noindex, nofollow">
+<meta name="referrer" content="no-referrer">
 <title>Swing Desk</title>
 <style>
 /* Layout: a trading-desk console. Status strip, bucket mix as the centrepiece, the open
@@ -62,6 +64,7 @@ p{margin:0}
 .chip.info{color:var(--ink-2);background:var(--inset);border-color:var(--line)}
 .card{background:var(--surface);border:1px solid var(--line);border-radius:var(--r);padding:18px;min-width:0}
 .banner{border-radius:var(--r);padding:10px 14px;font-weight:500;border:1px solid}
+.banner.info{color:var(--ink-2);background:var(--inset);border-color:var(--line);font-weight:400;font-size:13px}
 .banner.crit{color:var(--crit-ink);background:color-mix(in srgb,var(--crit) 10%,var(--surface));border-color:color-mix(in srgb,var(--crit) 40%,transparent)}
 .kpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:12px}
 .kpi{background:var(--surface);border:1px solid var(--line);border-radius:var(--r);padding:14px 16px;display:grid;gap:2px}
@@ -230,6 +233,7 @@ h3{font-size:14px;font-weight:600;margin:18px 0 0}
     <div class="tags" id="tags"></div>
   </header>
   <div id="banner" class="banner crit" hidden></div>
+  <div id="sim-note" class="banner info" hidden>Demo: every position, price, date and index series on this page is simulated by the Swing Desk's own code. It is not market data and not a recommendation.</div>
 
   <section class="kpis" id="kpis" aria-label="Book summary"></section>
 
@@ -471,6 +475,8 @@ let STATE = /*__STATE__*/null;
     else tags.append(chip("crit", "✕", `${t.open - t.protected} of ${t.open} positions have NO stop`));
     if (s.breaker && s.breaker.paused) tags.append(chip("crit", "■", "New buys paused"));
     tags.append(el("span", "tag", (LIVE ? "Updated " : "Snapshot ") + new Date(s.generated_at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })));
+    $("sim-note").hidden = s.mode !== "sim";
+    if (!LIVE && s.generated_at) document.title = `Swing Desk · ${new Date(s.generated_at).toLocaleDateString("en-GB", { day: "numeric", month: "short" })}`;
     const b = $("banner");
     if (s.error) { b.textContent = "The guardian hit a problem: " + s.error; b.hidden = false; } else b.hidden = true;
   }

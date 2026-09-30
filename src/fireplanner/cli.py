@@ -425,6 +425,43 @@ def cmd_trade_demo(args) -> int:
     return 0
 
 
+def cmd_trade_snapshot(args) -> int:
+    """One self-contained HTML file of your real dashboard, to host behind a password."""
+    import os
+
+    from .trading.server import fetch_state, render_dashboard
+
+    if args.direct:
+        service, _ = _trade_service(args)
+        service.orders_enabled = False           # a snapshot never sends an order
+        try:
+            for _ in range(3):
+                state = service.cycle()
+        finally:
+            service.broker.disconnect()
+    else:
+        from .trading import load_settings
+
+        dash = load_settings(args.config)["dashboard"]
+        url = args.url or f"http://{dash['host']}:{dash['port']}"
+        try:
+            state = fetch_state(url, os.environ.get("FIREPLANNER_DASH_TOKEN", ""))
+        except Exception as exc:
+            print(f"  can't read the running dashboard at {url}: {exc}\n"
+                  f"  start it with `fireplanner trade run`, or use --direct for a one-off read from IBKR.",
+                  file=sys.stderr)
+            return 1
+    html = render_dashboard(state, live=False)
+    out = os.path.abspath(args.output)
+    os.makedirs(os.path.dirname(out), exist_ok=True)
+    with open(out, "w", encoding="utf-8") as f:
+        f.write(html)
+    t = state["totals"]
+    print(f"wrote {args.output}  ({len(html):,} bytes, {t['open']} positions, {state['mode']} account)")
+    print("  This page shows your positions and account figures. Host it behind a password, never publicly.")
+    return 0
+
+
 def cmd_trade_watch(args) -> int:
     from .trading import Journal, import_watchlist, load_settings, parse_symbol
 
@@ -598,6 +635,13 @@ def main(argv=None) -> int:
     p = trade_parser("demo", "write the dashboard for a simulated book (no IBKR needed)", cmd_trade_demo)
     p.add_argument("-o", "--output", default="swing_desk.html")
     p.add_argument("--print", action="store_true", help="also print the book")
+
+    p = trade_parser("snapshot", "write your real dashboard as one HTML file to host", cmd_trade_snapshot)
+    broker_opts(p)
+    p.add_argument("-o", "--output", default="site/swing-desk/index.html")
+    p.add_argument("--url", default="", help="the running dashboard (default: trading.dashboard in the config)")
+    p.add_argument("--direct", action="store_true",
+                   help="read IBKR directly instead of a running dashboard (use a --trade-client-id the guardian isn't using)")
 
     p = trade_parser("watch", "edit the watchlist", cmd_trade_watch)
     p.add_argument("action", choices=["add", "rm", "import", "list"])
