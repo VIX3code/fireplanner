@@ -319,7 +319,9 @@ def _trade_service(args):
     service = TradingService(broker, journal, rules,
                              orders_enabled=bool(settings["enabled"]) and not args.dry_run,
                              notifier=notifier, seed_watchlist=settings["watchlist"],
-                             lot_sizes=settings["lot_sizes"], weather_proxies=settings["weather"])
+                             lot_sizes=settings["lot_sizes"], weather_proxies=settings["weather"],
+                             breadth_baskets=settings["breadth"].get("baskets") or None,
+                             breadth_per_cycle=int(settings["breadth"].get("per_cycle", 8)))
     return service, settings
 
 

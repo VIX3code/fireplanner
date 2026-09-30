@@ -120,6 +120,8 @@ class TradingRules:
     # -- market weather -------------------------------------------------------------
     #: Weather label -> multiplier on the fixed loss. 0 blocks new buys.
     weather_sizing: dict = field(default_factory=lambda: dict(DEFAULT_WEATHER_SIZING))
+    #: Share of the weather score that comes from breadth (the rest is the regime model).
+    breadth_weight: float = 0.25
 
     # -- concentration --------------------------------------------------------------
     #: Most open positions in one sector (IBKR's industry category).
@@ -273,6 +275,9 @@ DEFAULT_SETTINGS = {
     # Index proxy per market for the market-weather check. US also uses VIX,
     # RSP (breadth) and VIX3M; the others use trend and drawdown of the proxy.
     "weather": {"US": "SPY", "LSE": "ISF:LN", "SEHK": "2800:HK", "SGX": "ES3:SG", "TSEJ": "1306:JP"},
+    # Breadth baskets per market (defaults in trading/breadth.py) and how many
+    # stocks' bars to fetch per cycle, to stay inside IBKR's pacing limit.
+    "breadth": {"per_cycle": 8, "baskets": {}},
     # Earnings dates: IBKR has no free calendar, so dates come from you (dashboard
     # or `trade earnings`) and, if FMP_API_KEY is set, Financial Modeling Prep.
     "earnings": {"provider": "manual"},

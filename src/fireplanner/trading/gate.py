@@ -53,6 +53,8 @@ class GateContext:
     sector: str = ""
     #: Open positions per sector.
     sector_counts: dict = field(default_factory=dict)
+    #: Anchored VWAPs: {"anchors": [Anchor dicts], "pullback": Anchor dict or None}.
+    avwap: dict | None = None
     #: Adding to an open winner rather than opening a position.
     is_add: bool = False
     #: Why an add isn't allowed, or None.
@@ -83,6 +85,10 @@ class GateResult:
 
 def _money(x: float) -> str:
     return f"${x:,.0f}"
+
+
+def _decimals(x: float) -> int:
+    return 0 if x >= 1000 else 2 if x >= 1 else 4
 
 
 def check_entry(plan: EntryPlan, inst: Instrument, *, rules: TradingRules, ctx: GateContext) -> GateResult:
@@ -195,6 +201,36 @@ def check_entry(plan: EntryPlan, inst: Instrument, *, rules: TradingRules, ctx: 
             add(Check("info", "Brings Volatile's share down", f"{move}; still over the {rules.swing_guide:.0%} guide."))
         else:
             add(Check("good", "Within the swing guide", move))
+
+    # anchored VWAP: where buyers since an event are, relative to this price
+    av = ctx.avwap or {}
+    anchors = av.get("anchors") or []
+    if anchors:
+        fmt = lambda x: f"{x:,.{_decimals(x)}f}"   # noqa: E731
+        above = [a for a in anchors if a["distance"] < 0]
+        pb = av.get("pullback")
+        if above:
+            names = " and ".join(f"{a['label'].split(' ')[0].lower()} VWAP ({fmt(a['avwap'])})" for a in above[:2])
+            add(Check("warn", f"Below its {names}",
+                      "Buyers since then are losing money and tend to sell into rallies near that price."))
+        supports = [a for a in anchors if a["distance"] > 0 and not (a["kind"] == "gap" and (a.get("gap") or 0) < 0)]
+        if not pb and supports:
+            near = min(supports, key=lambda a: a["distance"])
+            add(Check("info", f"Extended: {near['distance']:.1%} above its {near['label']} VWAP",
+                      f"No support level within three average days' range. A buy here has further to fall "
+                      f"to {fmt(near['avwap'])} if it pulls back."))
+        if pb:
+            level, dist = pb["avwap"], pb["distance"]
+            if plan.limit <= level * 1.002:
+                add(Check("good", f"Buying at the {pb['label']} VWAP",
+                          f"A limit at {fmt(plan.limit)} waits for the stock to come back to what buyers "
+                          f"since {pb['label'].split(' ', 1)[-1]} paid."))
+            else:
+                extended = plan.atr and dist > 2 * plan.atr
+                add(Check("info", f"Pullback level: {pb['label']} VWAP {fmt(level)}",
+                          (f"The price is {dist:.1%} above it, more than two average days' range: extended. "
+                           if extended else f"The price is {dist:.1%} above it. ")
+                          + "A limit there enters nearer support; the stop moves down with it."))
 
     # earnings
     e = ctx.earnings

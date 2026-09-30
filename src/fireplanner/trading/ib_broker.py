@@ -23,9 +23,10 @@ from __future__ import annotations
 
 import math
 import time
+from collections import deque
 from datetime import date, datetime, timezone
 
-from .broker import BrokerFill, BrokerOrder, BrokerPosition, CashView, OrderSpec
+from .broker import BrokerFill, BrokerOrder, BrokerPosition, CashView, OrderSpec, PacingDeferred
 from .markets import MARKETS, Instrument, detect_inverse
 from .rules import TradingRules
 
@@ -86,8 +87,11 @@ class IBBroker:
         self._inst: dict[int, Instrument] = {}
         self._by_key: dict[str, Instrument] = {}
         self._trades: dict[int, object] = {}
-        self._atr: dict[int, tuple[date, float | None]] = {}
         self._fx: dict[str, tuple[float, float]] = {}
+        self._bars_cache: dict[str, tuple[date, object]] = {}
+        # IBKR allows about 60 historical requests per 10 minutes; keep a margin.
+        self.hist_limit, self.hist_window = 50, 600.0
+        self._hist: deque = deque()
         self.dirty = False
 
     # -- connection ------------------------------------------------------
@@ -266,41 +270,32 @@ class IBBroker:
         return out
 
     def daily_atr(self, inst: Instrument) -> float | None:
-        today = date.today()
-        hit = self._atr.get(inst.con_id)
-        if hit and hit[0] == today:
-            return hit[1]
-        from ib_async import util
-
-        from ..data.base import normalize_bars
+        """14-day average daily range from the same daily bars the AVWAP uses (one request a day)."""
         from ..indicators.core import natr
 
-        ib = self.connect()
-        value = None
-        try:
-            bars = ib.reqHistoricalData(self._contracts[inst.con_id], endDateTime="", durationStr="60 D",
-                                        barSizeSetting="1 day", whatToShow="TRADES", useRTH=True, formatDate=1)
-            if bars:
-                df = normalize_bars(util.df(bars))
-                series = natr(df, 14).dropna()
-                if len(series):
-                    value = float(series.iloc[-1]) / 100.0
-        except Exception:
-            value = None
-        self._atr[inst.con_id] = (today, value)
-        return value
+        bars = self.bars(inst.symbol if inst.market == "US" else inst.key)   # may raise PacingDeferred
+        series = natr(bars, 14).dropna()
+        return float(series.iloc[-1]) / 100.0 if len(series) else None
+
+    def _take_hist_slot(self) -> None:
+        now = time.monotonic()
+        while self._hist and now - self._hist[0] > self.hist_window:
+            self._hist.popleft()
+        if len(self._hist) >= self.hist_limit:
+            raise PacingDeferred("IBKR pacing: historical data deferred to a later cycle")
+        self._hist.append(now)
 
     _INDICES = {"VIX": "CBOE", "VIX3M": "CBOE", "VIX9D": "CBOE", "SPX": "CBOE"}
 
     def bars(self, symbol_text: str, days: int = 520):
-        """Daily bars for the market-weather proxies, cached for the day."""
+        """Daily bars, cached for the day. Raises `PacingDeferred` rather than break IBKR's pacing."""
         from ib_async import Index, util
 
         from ..data.base import drop_incomplete_last_bar, normalize_bars
         from .markets import parse_symbol
 
         key = symbol_text.upper()
-        hit = getattr(self, "_bars_cache", {}).get(key)
+        hit = self._bars_cache.get(key)
         if hit and hit[0] == date.today():
             return hit[1]
         ib = self.connect()
@@ -310,13 +305,14 @@ class IBBroker:
         else:
             sym, mkt = parse_symbol(key)
             contract = self._contracts[self.instrument(sym, mkt).con_id]
+        self._take_hist_slot()
         years = max(1, round(days / 252))
         raw = ib.reqHistoricalData(contract, endDateTime="", durationStr=f"{years} Y", barSizeSetting="1 day",
                                    whatToShow="TRADES", useRTH=True, formatDate=1)
         if not raw:
             raise LookupError(f"IBKR returned no bars for {symbol_text}")
         frame = drop_incomplete_last_bar(normalize_bars(util.df(raw))).tail(days)
-        self._bars_cache = {**getattr(self, "_bars_cache", {}), key: (date.today(), frame)}
+        self._bars_cache[key] = (date.today(), frame)
         return frame
 
     def usd_per_unit(self, currency: str) -> tuple[float, bool]:

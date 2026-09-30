@@ -176,6 +176,7 @@ input,select{font:inherit;font-size:14px;color:var(--ink);background:var(--inset
 .feed time{color:var(--muted);font-variant-numeric:tabular-nums}
 .wl td .rowbtns{display:inline-flex;gap:6px}
 .wl select{padding:4px 6px;font-size:12.5px;width:auto}
+.wl td:first-child{white-space:normal;min-width:180px;max-width:240px}
 .typ{display:inline-flex;align-items:center;gap:6px}
 .typ .small,.typ .ok-small{display:inline}
 .notes{font-size:12.5px;color:var(--ink-2);display:grid;gap:6px}
@@ -187,9 +188,8 @@ input,select{font:inherit;font-size:14px;color:var(--ink);background:var(--inset
 .tip .x{color:var(--muted);margin-top:2px}
 
 /* weather + breakers */
-.row2{display:grid;grid-template-columns:minmax(0,1.6fr) minmax(0,1fr);gap:16px;align-items:start}
-@media (max-width:900px){.row2{grid-template-columns:1fr}}
-.wx{display:grid;grid-template-columns:repeat(auto-fit,minmax(118px,1fr));gap:10px;margin-top:12px}
+.row2{display:grid;grid-template-columns:1fr;gap:16px;align-items:start}
+.wx{display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:10px;margin-top:12px}
 td.flags{white-space:normal;min-width:120px;max-width:170px}
 .wxc{border:1px solid var(--line);border-radius:8px;padding:10px 12px;background:var(--inset);display:grid;gap:4px;align-content:start}
 .wxc .m{font-weight:600}
@@ -197,7 +197,8 @@ td.flags{white-space:normal;min-width:120px;max-width:170px}
 .meter{height:6px;border-radius:3px;background:color-mix(in srgb,var(--b-core) 18%,transparent);overflow:hidden}
 .meter span{display:block;height:100%;background:var(--b-core);border-radius:3px}
 .meter.warn span{background:var(--warn)} .meter.crit span{background:var(--crit)}
-.brk{display:grid;gap:10px;margin-top:12px}
+.brk{display:grid;gap:10px 20px;margin-top:12px;grid-template-columns:repeat(auto-fit,minmax(210px,1fr))}
+.brk > .msg{grid-column:1 / -1}
 .brk .line{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:4px 10px;font-size:13px}
 .brk .line .meter{grid-column:1 / -1}
 .sectors{display:flex;flex-wrap:wrap;gap:6px;margin-top:10px}
@@ -211,8 +212,12 @@ td.flags{white-space:normal;min-width:120px;max-width:170px}
 .stat .n{font-size:12px;color:var(--ink-2)}
 .settings{display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:10px;margin-top:12px;align-items:end}
 .inline{display:inline-flex;gap:6px;align-items:center}
-.inline input{width:130px;padding:4px 6px;font-size:12.5px}
+.inline input{width:118px;padding:4px 6px;font-size:12.5px}
 h3{font-size:14px;font-weight:600;margin:18px 0 0}
+.bline{display:grid;grid-template-columns:44px minmax(0,1fr) 34px;gap:6px;align-items:center;font-size:11.5px;color:var(--ink-2)}
+.anchors{margin-top:12px;display:grid;gap:6px}
+.anchors .a{display:grid;grid-template-columns:minmax(0,1fr) auto auto;gap:8px;align-items:center;font-size:13px;padding:6px 10px;border:1px solid var(--line);border-radius:8px;background:var(--inset)}
+.anchors .a b{font-variant-numeric:tabular-nums}
 </style>
 </head>
 <body>
@@ -377,11 +382,11 @@ h3{font-size:14px;font-weight:600;margin:18px 0 0}
     </div>
     <p class="msg" id="wl-msg" hidden></p>
     <div class="table-wrap">
-      <table class="wl" style="min-width:900px">
+      <table class="wl" style="min-width:940px">
         <thead><tr>
-          <th scope="col">Stock</th><th scope="col">Last</th><th scope="col">Daily range</th>
-          <th scope="col">Stock type</th><th scope="col">Earnings</th><th scope="col">Status</th>
-          <th scope="col"></th>
+          <th scope="col">Stock</th><th scope="col">Last</th>
+          <th scope="col">Pullback level</th><th scope="col">Stock type</th><th scope="col">Earnings</th>
+          <th scope="col">Status</th><th scope="col"></th>
         </tr></thead>
         <tbody id="wl-rows"></tbody>
       </table>
@@ -494,7 +499,18 @@ let STATE = /*__STATE__*/null;
       else if (w.multiplier < 1) c.append(chip("warn", "▲", `${w.label} · ${pct(w.multiplier)} size`));
       else c.append(chip("good", "✓", `${w.label} · full size`));
       if (w.score != null) c.append(meter(w.score, w.multiplier <= 0 ? "crit" : w.multiplier < 1 ? "warn" : ""));
-      c.append(el("span", "s", w.label ? `${w.proxy} · score ${Math.round(w.score * 100)} · ${fmtDate(w.as_of)}` : (w.note || w.proxy)));
+      const b = w.breadth;
+      if (w.label && b && b.score != null) {
+        c.append(el("span", "s", `Score ${Math.round(w.score * 100)}: regime ${Math.round(w.regime_score * 100)}, breadth ${Math.round(b.score * 100)}`));
+        [["20d", b.pct20], ["50d", b.pct50], ["200d", b.pct200]].forEach(([k, v]) => {
+          const r = el("div", "bline"); r.append(el("span", null, `> ${k}`), meter(v || 0, v < 0.4 ? "warn" : ""), el("span", null, pct(v || 0)));
+          c.append(r);
+        });
+        c.append(el("span", "s", `${b.counted} of ${b.basket} big stocks · ${w.proxy} · ${fmtDate(w.as_of)}`));
+      } else {
+        c.append(el("span", "s", w.label ? `${w.proxy} · score ${Math.round(w.score * 100)} · ${fmtDate(w.as_of)}` : (w.note || w.proxy)));
+        if (w.label && b) c.append(el("span", "s", `Breadth: ${b.counted} of ${b.basket} stocks read so far`));
+      }
       box.append(c);
     });
   }
@@ -739,7 +755,7 @@ let STATE = /*__STATE__*/null;
       const bucket = w.confirmed || w.suggested;
       const tick = el("span", "tick"); if (bucket) tick.append(swatch(bucket)); tick.append(document.createTextNode(w.symbol));
       const name = el("div"); name.append(tick, el("span", "small", `${MARKET_SHORT[w.market] || w.market}${w.lot_size > 1 ? ` · lot ${w.lot_size}` : ""}${w.sector ? " · " + w.sector : ""}${w.name ? " · " + w.name : ""}${w.source === "manual" ? " · added by you" : ""}`));
-      const last = el("div"); last.append(el("span", null, px(w.last, w.decimals)), el("span", "small", w.currency));
+      const last = el("div"); last.append(el("span", null, px(w.last, w.decimals)), el("span", "small", `${w.currency}${w.atr != null ? " · " + pct(w.atr, 1) + "/day" : ""}`));
       const typ = el("div", "typ");
       const sel = el("select"); sel.setAttribute("aria-label", `Stock type for ${w.key}`); sel.disabled = !LIVE;
       ["steady", "core", "volatile"].forEach(b => { const op = el("option", null, BUCKET_NAMES[b]); op.value = b; if (b === bucket) op.selected = true; sel.append(op); });
@@ -763,9 +779,22 @@ let STATE = /*__STATE__*/null;
       const btns = el("span", "rowacts");
       btns.append(btn("Check", "ghost", () => { $("gate-sym").value = w.key; $("gate-bucket").value = ""; $("gate-limit").value = ""; runCheck(false); $("gate-h").scrollIntoView({ behavior: "smooth", block: "start" }); }));
       btns.append(btn("Remove", "ghost", async () => { try { const r = await api("/api/unwatch", { key: w.key }); say("wl-msg", r.message, true); refresh(); } catch (e) { say("wl-msg", e.message, false); } }, !LIVE));
-      tr.append(td(name), td(last), td(w.atr != null ? pct(w.atr, 1) : "—"), td(typ), td(earn), td(status), td(btns));
+      tr.append(td(name), td(last), td(avwapCell(w)), td(typ), td(earn), td(status), td(btns));
       tb.append(tr);
     });
+  }
+  const drop = a => a.distance / (1 + a.distance);     // how far the price must fall to reach the level
+  function avwapCell(w) {
+    const d = el("div"), av = w.avwap;
+    if (!av) { d.append(el("span", "small", "—")); return d; }
+    const below = av.anchors.filter(a => a.distance < 0);
+    if (av.pullback) {
+      d.append(el("span", null, px(av.pullback.avwap, w.decimals)));
+      d.append(el("span", "small", `${av.pullback.label} · ${sPct(-drop(av.pullback))}`));
+    }
+    if (below.length) d.append(chip("warn", "▼", `Below ${below[0].label.split(" ")[0].toLowerCase()} VWAP`));
+    if (!av.pullback && !below.length) d.append(el("span", "small", "—"));
+    return d;
   }
   async function setBucket(key, bucket) { try { const r = await api("/api/bucket", { key, bucket }); say("wl-msg", r.message, true); refresh(); } catch (e) { say("wl-msg", e.message, false); } }
   $("wl-form").addEventListener("submit", async e => {
@@ -825,6 +854,18 @@ let STATE = /*__STATE__*/null;
     const ul = el("ul", "checks"); const icon = { good: "✓", warn: "!", crit: "✕", info: "i" };
     res.checks.forEach(c => { const li = el("li"); const m = el("span", "mark " + c.level, icon[c.level]); m.setAttribute("aria-hidden", "true"); const t = el("div"); t.append(el("span", "t", c.title), el("span", "d", c.detail)); li.append(m, t); ul.append(li); });
     out.append(ul);
+    if (res.avwap && res.avwap.anchors.length) {
+      const box = el("div", "anchors");
+      box.append(el("span", "small", "Anchored VWAP: what buyers since each day paid on average"));
+      res.avwap.anchors.forEach(a => {
+        const row = el("div", "a");
+        const lab = el("span", null, a.label + " "); if (res.avwap.pullback && res.avwap.pullback.date === a.date) lab.append(chip("good", "✓", "pullback level"));
+        row.append(lab, el("b", a.distance < 0 ? "down" : null, `${px(a.avwap, d)} · ${a.distance >= 0 ? sPct(-drop(a)) + " from here" : "above the price"}`));
+        const use = btn("Use as limit", "ghost", () => { $("gate-limit").value = String(a.avwap.toFixed(d)); runCheck(res.is_add); }, a.distance < 0 || !LIVE);
+        row.append(use); box.append(row);
+      });
+      out.append(box);
+    }
     const acts = el("div", "actions");
     const go = btn(res.is_add ? "Send add order" : "Send buy order", "", null, !(LIVE && res.verdict !== "blocked" && p.qty > 0));
     acts.append(go);
@@ -873,6 +914,7 @@ let STATE = /*__STATE__*/null;
       `Stock type from the 14-day average daily range: Steady under ${p1(b[0].max_atr)}, Core ${p1(b[0].max_atr).replace("%", "")}–${p1(b[1].max_atr)}, Volatile above. Suggested by the system, confirmed by you.`,
       `Two strikes: after a stop-out you may re-enter once; a second in a row locks the stock ${r.lockout_days == null ? "until you unlock it" : `for ${r.lockout_days} trading days`}. One add to a winner once its stop is at entry, sized for the same fixed loss.`,
       `Time stop: a position that hasn't reached +${pct(r.time_stop_min_gain)} within ${r.time_stop_weeks} weeks is flagged${r.time_stop_action === "sell" ? " and sold" : ""}. Market weather scales new buys: Defensive half size, Risk-Off none.`,
+      `Market weather blends each market's regime score with breadth (${pct(r.breadth_weight)}): the share of its big stocks above their 20, 50 and 200-day averages. Anchored VWAP levels (from the earnings or gap day, the last breakout, the swing low) show where buyers since then sit; a pullback to the nearest one below the price is offered as a limit.`,
       `Circuit breakers pause new buys after ${usd(r.daily_loss_limit_usd)} lost in a day, ${usd(r.weekly_loss_limit_usd)} in a week, or ${r.max_consecutive_losses} stop-outs in a row. Open positions keep their stops.`,
     ].forEach(t => box.append(el("li", null, t)));
   }

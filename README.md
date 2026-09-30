@@ -348,8 +348,11 @@ Singapore and Tokyo listings:
   mix shown by money **and** by daily swing, plus a cap of four per sector.
 - **Two strikes per stock** (a second stop-out in a row locks it until you unlock it), one add to
   a winner, and a time stop.
-- **Market weather per market** scales new buys, and **circuit breakers** (daily and weekly loss
-  limits, three losses in a row, a kill switch) pause them.
+- **Market weather per market** (the regime model blended with breadth: the % of big stocks above
+  their 20/50/200-day) scales new buys, and **circuit breakers** (daily and weekly loss limits,
+  three losses in a row, a kill switch) pause them.
+- **Anchored VWAP** from the earnings day, the last breakout and the swing low, with the nearest
+  level below the price offered as a pullback limit.
 - **Earnings dates** beside every stock, and a **journal** graded in R by type and setup.
 
 ```bash
@@ -431,18 +434,19 @@ src/fireplanner/
                  guardian.py no position without a stop; stops only move up
                  sync.py    keeps the journal in step with the broker
                  journal.py SQLite: trades, exits, alerts, watchlist, settings
-                 weather.py per-market regime for new buys; breakers.py loss limits
+                 weather.py per-market regime + breadth.py for new buys
+                 avwap.py   anchored VWAP pullback levels; breakers.py loss limits
                  earnings.py earnings dates; stats.py the journal graded in R
                  service.py the loop; server.py the live dashboard
                  sim.py     in-memory broker; ib_broker.py TWS / IB Gateway
-tests/           208 tests
+tests/           217 tests
 data/snapshots/  real IBKR pulls: SPY, VIX, RSP, NVDA, ZS, MP, FTNT + account state
 ```
 
 ## Correctness
 
 ```bash
-PYTHONPATH=src python3 -m pytest tests/ -q      # 208 passed
+PYTHONPATH=src python3 -m pytest tests/ -q      # 217 passed
 ```
 
 The tests that matter most:

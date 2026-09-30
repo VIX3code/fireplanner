@@ -178,6 +178,10 @@ trading:
 
   # Market weather: multiplier on the fixed loss for new buys, per market. 0 blocks.
   weather_sizing: {Risk-On: 1.0, Constructive: 1.0, Neutral: 1.0, Defensive: 0.5, Risk-Off: 0.0}
+  breadth_weight: 0.25        # share of the weather score from breadth (% of big stocks above 20/50/200-day)
+  breadth:
+    per_cycle: 8              # basket stocks fetched per cycle (IBKR allows ~60 history requests / 10 min)
+    baskets: {}               # override a market's basket, e.g. {US: [AAPL, MSFT, ...]}; defaults in trading/breadth.py
   weather:                    # index proxy per market
     US: SPY
     LSE: ISF:LN

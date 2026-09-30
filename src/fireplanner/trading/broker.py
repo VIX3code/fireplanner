@@ -17,7 +17,12 @@ from typing import Protocol
 
 from .markets import Instrument
 
-__all__ = ["BrokerPosition", "BrokerOrder", "BrokerFill", "OrderSpec", "CashView", "Broker", "order_ref", "parse_ref"]
+__all__ = ["BrokerPosition", "BrokerOrder", "BrokerFill", "OrderSpec", "CashView", "Broker", "PacingDeferred",
+           "order_ref", "parse_ref"]
+
+
+class PacingDeferred(Exception):
+    """A historical-data request was held back to stay inside IBKR's pacing limit. Try again later."""
 
 
 def order_ref(role: str, trade_id: int | str) -> str:

@@ -17,6 +17,7 @@ from datetime import datetime, timedelta, timezone
 import numpy as np
 import pandas as pd
 
+from .breadth import DEFAULT_BASKETS
 from .earnings import EarningsCalendar
 from .journal import Journal
 from .markets import Instrument, detect_inverse
@@ -138,6 +139,69 @@ def _weather_bars(broker: SimBroker) -> None:
     broker.set_bars("VIX3M", _bars(vix + 1.8, DEMO_TODAY))
 
 
+# Share of each breadth basket in an uptrend over the last few months.
+_BREADTH_UP = {"US": 0.72, "LSE": 0.50, "SEHK": 0.68, "SGX": 0.70, "TSEJ": 0.25}
+_PROXY = {"US": "SPY", "LSE": "ISF:LN", "SEHK": "2800:HK", "SGX": "ES3:SG", "TSEJ": "1306:JP"}
+
+# Chart shape per stock for the anchored-VWAP levels: sessions since the earnings gap, its size,
+# sessions since the breakout, and how the last month went.
+_SHAPES = {
+    "HOOD:US": (38, 0.09, 14, "pullback"), "META:US": (46, 0.06, 18, "pullback"),
+    "HD:US": (35, 0.05, 20, "pullback"), "COIN:US": (30, -0.07, None, "broken"),
+    "ZS:US": (25, 0.05, 12, "broken"), "SQQQ:US": (None, 0.0, None, "trend"),
+}
+
+
+def _breadth_bars(broker: SimBroker) -> None:
+    for market, syms in DEFAULT_BASKETS.items():
+        base = broker.bars(_PROXY[market])["close"].to_numpy()
+        base = base / base[0]
+        rng = np.random.default_rng(100 + len(market))
+        n_up = round(_BREADTH_UP[market] * len(syms))
+        for i, sym in enumerate(syms):
+            drift = np.zeros(len(base))
+            drift[-70:] = 0.0025 if i < n_up else -0.0025
+            idio = np.cumsum(drift + rng.normal(0, 0.006, len(base)))
+            text = sym if market == "US" else f"{sym}:{market}"
+            broker.set_bars(text, _bars(100.0 * base * np.exp(idio), DEMO_TODAY))
+
+
+def _stock_bars(broker: SimBroker, key: str, last: float, atr: float) -> None:
+    """A daily chart ending at ``last``, with an earnings gap and a breakout where the shape says."""
+    seed = sum(ord(c) * (i + 1) for i, c in enumerate(key))
+    gap_at, gap, brk_at, kind = _SHAPES.get(key, (35 + seed % 20, 0.05, 10 + seed % 12, "trend"))
+    n = 260
+    rng = np.random.default_rng(seed)
+    rets = rng.normal(0.0008, atr * 0.4, n)
+    vol = np.full(n, 1_000_000.0) * rng.uniform(0.7, 1.3, n)
+    if brk_at:
+        rets[-brk_at - 25:-brk_at] = rng.normal(0, atr * 0.2, 25)      # a quiet base...
+        rets[-brk_at] = 2.0 * atr                                       # ...then the breakout
+        vol[-brk_at] *= 2.5
+        post = slice(n - brk_at + 1, n)
+        if kind == "trend":
+            rets[post] += 0.3 * atr
+        elif kind == "pullback":
+            rets[n - brk_at + 1:n - 6] += 0.45 * atr                    # runs up...
+            rets[-6:] = rng.normal(-0.15 * atr, 0.05 * atr, 6)          # ...and eases back toward support
+        elif kind == "broken":
+            rets[n - brk_at + 1:n - 10] += 0.15 * atr
+    if kind == "broken":
+        rets[-10:] = rng.normal(-0.35 * atr, 0.1 * atr, 10)             # slipping under it
+    close = np.exp(np.cumsum(rets))
+    close = close / close[-1] * last
+    frame = _bars(close, DEMO_TODAY)
+    if gap_at:
+        i = n - gap_at
+        frame.iloc[i, frame.columns.get_loc("open")] = frame["close"].iloc[i - 1] * (1 + gap)
+        frame.iloc[i, frame.columns.get_loc("high")] = max(frame["open"].iloc[i], frame["close"].iloc[i]) * 1.01
+        frame.iloc[i, frame.columns.get_loc("low")] = min(frame["open"].iloc[i], frame["close"].iloc[i]) * 0.99
+        vol[i] *= 3.5
+    frame["volume"] = vol
+    sym, mkt = key.split(":")
+    broker.set_bars(sym if mkt == "US" else key, frame)
+
+
 def build_demo(rules: TradingRules | None = None, journal_path: str = ":memory:") -> tuple[TradingService, dict]:
     rules = rules or TradingRules()
     broker = SimBroker(cash_usd=130_000.0, clock=_at("2026-07-01"))
@@ -149,6 +213,7 @@ def build_demo(rules: TradingRules | None = None, journal_path: str = ":memory:"
                           leverage=lev, sector=sector)
         by_key[key] = broker.add(inst, 100.0, atr)
     _weather_bars(broker)
+    _breadth_bars(broker)
 
     journal = Journal(journal_path)
     service = TradingService(
@@ -200,10 +265,17 @@ def build_demo(rules: TradingRules | None = None, journal_path: str = ":memory:"
         broker._price[by_key[key].con_id] = price
     for key, day in _EARNINGS.items():
         journal.set_earnings(key, datetime.fromisoformat(day).date(), source="manual")
+    for key, cid, ccy, lot, mag, name, atr, sector in _LISTINGS:
+        _stock_bars(broker, key, broker._price[cid], atr)
     for key in _WATCH_ONLY:
         journal.watch(key, *key.split(":"), source="config")
 
     broker.clock = DEMO_TODAY
+    service._avwap.clear()                       # levels from the finished charts
+    for _ in range(40):                          # let breadth and VWAP levels fill in
+        service.cycle()
+        if service.weather.breadth.pending() == 0 and len(service._avwap) >= len(journal.watchlist()):
+            break
     state = service.cycle()
     checks = {}
     for key in ("HOOD:US", "COIN:US", "MP:US", "META:US", "HD:US", "700:SEHK", "SH:US", "SQQQ:US"):

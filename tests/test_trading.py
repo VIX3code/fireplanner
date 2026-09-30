@@ -799,3 +799,152 @@ def test_journal_csv_lists_closed_trades():
     _closed(j, "A:US", "2026-09-01", -0.05)
     lines = journal_csv(j).strip().splitlines()
     assert lines[0].startswith("id,stock,type,setup") and "A:US" in lines[1]
+
+
+# ---------------------------------------------------------------- breadth
+
+def _series(values, end="2026-09-30"):
+    import numpy as np
+    import pandas as pd
+    return pd.Series(np.asarray(values, dtype=float), index=pd.bdate_range(end=end, periods=len(values)))
+
+
+def test_breadth_counts_stocks_above_their_averages():
+    import numpy as np
+    from fireplanner.trading.breadth import breadth_of
+    up = _series(np.linspace(50, 100, 260))                     # above every average
+    down = _series(np.linspace(100, 50, 260))                   # below every average
+    young = _series(np.linspace(50, 60, 60))                    # too short for the 200-day
+    pct, counted, as_of = breadth_of({"A": up, "B": down, "C": young})
+    assert pct[20] == pytest.approx(2 / 3) and pct[200] == pytest.approx(0.5)
+    assert counted == 3 and as_of == "2026-09-30"
+
+
+def test_breadth_fetches_a_few_per_cycle_and_backs_off_for_pacing():
+    import numpy as np
+    import pandas as pd
+    from fireplanner.trading.breadth import MarketBreadth
+    from fireplanner.trading.broker import PacingDeferred
+    calls = []
+
+    def bars(text):
+        calls.append(text)
+        if text == "BAD:SEHK":
+            raise LookupError("no such stock")
+        if len(calls) == 7:
+            raise PacingDeferred("slow down")
+        return pd.DataFrame({"close": _series(np.linspace(50, 100, 260))})
+
+    mb = MarketBreadth({"US": ["A", "B", "C", "D"], "SEHK": ["700", "BAD", "5"]}, bars, per_cycle=2)
+    day = date(2026, 9, 30)
+    assert mb.step(day) == 2 and mb.reading("US").score is None      # 2 of 4: under 60% coverage
+    mb.step(day)
+    us = mb.reading("US")
+    assert us.counted == 4 and us.score == pytest.approx(1.0)
+    mb.step(day)                                                      # 700, then BAD fails
+    assert "BAD" in mb._failed["SEHK"]
+    assert mb.step(day) == 0 and mb.pending() == 1                    # deferred, not failed
+    mb.step(day)
+    assert mb.pending() == 0 and mb.reading("SEHK").counted == 2
+
+
+def test_narrow_breadth_pulls_the_weather_down():
+    from fireplanner.trading.breadth import MarketBreadth
+    from fireplanner.trading.weather import band_label
+    base = WeatherReading("US", "SPY", "Constructive", 0.65, 1.0, "2026-09-30", {})
+    mw = MarketWeather(RULES, {"US": "SPY"}, lambda s: None,
+                       MarketBreadth({"US": ["A"]}, lambda s: None))
+    mw._regime = {"US": base}
+    mw.breadth._closes["US"] = {"A": _series([100.0] * 199 + [50.0])}   # below every average
+    mw.rescale(RULES)
+    r = mw.readings["US"]
+    assert r.breadth["score"] == 0 and r.regime_label == "Constructive"
+    assert r.score == pytest.approx(0.75 * 0.65) and r.label == band_label(0.4875) == "Neutral"
+
+
+# ---------------------------------------------------------------- anchored VWAP
+
+def _chart(n=200, gap_at=40, gap=0.06, brk_at=15):
+    import numpy as np
+    import pandas as pd
+    close = np.full(n, 100.0)
+    close[:-brk_at] = np.linspace(80, 100, n - brk_at) + np.sin(np.arange(n - brk_at)) * 0.5
+    close[-brk_at:] = np.linspace(106, 112, brk_at)
+    idx = pd.bdate_range(end="2026-09-30", periods=n)
+    df = pd.DataFrame({"open": close, "high": close * 1.005, "low": close * 0.995, "close": close,
+                       "volume": 1_000_000.0}, index=idx)
+    i = n - gap_at
+    df.iloc[i, 0] = df["close"].iloc[i - 1] * (1 + gap)
+    df.iloc[i, 1] = max(df.iloc[i, 0], df.iloc[i, 3]) * 1.01
+    df.iloc[i, 4] = 4_000_000.0
+    return df
+
+
+def test_avwap_is_the_volume_weighted_price_since_the_anchor():
+    import pandas as pd
+    from fireplanner.trading.avwap import avwap_since
+    idx = pd.bdate_range("2026-09-01", periods=3)
+    df = pd.DataFrame({"high": [10, 20, 30], "low": [10, 20, 30], "close": [10, 20, 30],
+                       "volume": [1, 1, 2]}, index=idx)
+    assert avwap_since(df, idx[1]) == pytest.approx((20 + 60) / 3)
+    assert avwap_since(df, idx[0]) == pytest.approx((10 + 20 + 60) / 4)
+
+
+def test_anchors_find_the_gap_the_breakout_leg_and_a_pullback():
+    from fireplanner.trading.avwap import anchored_vwaps, find_breakout_day, find_gap_day, pullback_level
+    df = _chart()
+    day, g = find_gap_day(df)
+    assert day == df.index[-40] and g > 0.05
+    assert find_breakout_day(df) == df.index[-15]            # the start of the leg, not yesterday
+    anchors = anchored_vwaps(df)
+    kinds = {a.kind for a in anchors}
+    assert {"gap", "breakout"} <= kinds
+    brk = next(a for a in anchors if a.kind == "breakout")
+    assert 0 < brk.distance < 0.05
+    pb = pullback_level(anchors, float(df["close"].iloc[-1]), 0.02)
+    assert pb is not None and pb.kind == "breakout"
+    # a known earnings date replaces the gap search
+    with_date = anchored_vwaps(df, earnings_day=df.index[-40].date())
+    assert any(a.kind == "earnings" for a in with_date) and not any(a.kind == "gap" for a in with_date)
+
+
+def test_avwap_on_real_ibkr_snapshots():
+    from fireplanner.data import SnapshotProvider
+    from fireplanner.trading.avwap import anchored_vwaps
+    sp = SnapshotProvider("data/snapshots")
+    ftnt = anchored_vwaps(sp.history("FTNT").tail(260))
+    gap = next(a for a in ftnt if a.kind == "gap")
+    assert gap.label == "Gap up 30 Jul" and gap.distance < 0      # FTNT closed under its gap-up VWAP
+
+
+def test_the_check_shows_vwap_levels_and_pullback_limits(demo):
+    _, state = demo
+    hood = state["demo_checks"]["HOOD:US"]
+    assert hood["avwap"]["pullback"]["kind"] == "breakout"
+    assert any(c["title"].startswith("Pullback level: Breakout") for c in hood["checks"])
+    coin = state["demo_checks"]["COIN:US"]
+    assert any(c["level"] == "warn" and c["title"].startswith("Below its") for c in coin["checks"])
+    wl = {w["key"]: w for w in state["watchlist"]}
+    assert wl["META:US"]["avwap"]["pullback"] is not None
+    assert wl["NVDA:US"]["avwap"]["pullback"] is None               # extended: nothing within reach
+
+
+def test_buying_at_the_pullback_level_moves_the_stop_down_with_it():
+    broker, journal, svc = make()
+    broker.add(us("META", 44), 742.0, 0.022)
+    broker.set_bars("META", _chart(gap_at=40, brk_at=15).assign(
+        **{c: lambda d, c=c: d[c] * 742.0 / 112.0 for c in ("open", "high", "low", "close")}))
+    svc.cycle()
+    res = svc.check("META")
+    pb = res["avwap"]["pullback"]
+    at = svc.check("META", limit=round(pb["avwap"], 2))
+    assert any(c["title"].startswith("Buying at the") for c in at["checks"])
+    assert at["plan"]["stop"] < res["plan"]["stop"]
+
+
+def test_demo_weather_blends_breadth(demo):
+    _, state = demo
+    w = state["weather"]
+    assert w["TSEJ"]["breadth"]["pct50"] < 0.4 and w["TSEJ"]["label"] == "Defensive"
+    assert w["US"]["breadth"]["score"] > 0.6 and w["US"]["label"] == "Risk-On"
+    assert all(x["breadth"]["counted"] == x["breadth"]["basket"] for x in w.values())

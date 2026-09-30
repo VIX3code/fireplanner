@@ -29,8 +29,10 @@ from concurrent.futures import Future
 from dataclasses import replace
 from datetime import datetime
 
+from .avwap import Anchor, anchored_vwaps, pullback_level
+from .breadth import DEFAULT_BASKETS, MarketBreadth
 from .breakers import breaker_state
-from .broker import Broker, BrokerPosition, OrderSpec, order_ref
+from .broker import Broker, BrokerPosition, OrderSpec, PacingDeferred, order_ref
 from .buckets import bucket_mix
 from .earnings import EarningsCalendar, parse_date
 from .gate import GateContext, check_entry
@@ -55,14 +57,22 @@ _NOTIFY_KINDS = {"opened", "closed", "stopped-out", "exit-target", "exit-stop", 
 class TradingService:
     def __init__(self, broker: Broker, journal: Journal, rules: TradingRules, *,
                  orders_enabled: bool = False, notifier=None, seed_watchlist=(), lot_sizes: dict | None = None,
-                 weather_proxies: dict | None = None, earnings: EarningsCalendar | None = None):
+                 weather_proxies: dict | None = None, earnings: EarningsCalendar | None = None,
+                 breadth_baskets: dict | bool | None = None, breadth_per_cycle: int = 8, avwap_per_cycle: int = 4):
         self.broker, self.journal = broker, journal
         self.base_rules = rules
         self.rules = with_overrides(rules, journal.settings())
         self.orders_enabled = orders_enabled
         self.notifier = notifier
         self.lot_sizes = {str(k).upper(): int(v) for k, v in (lot_sizes or {}).items()}
-        self.weather = MarketWeather(self.rules, weather_proxies, broker.bars) if weather_proxies else None
+        breadth = None
+        if weather_proxies and breadth_baskets is not False:
+            baskets = {**DEFAULT_BASKETS, **(breadth_baskets or {})}
+            baskets = {m: b for m, b in baskets.items() if m in weather_proxies and b}
+            breadth = MarketBreadth(baskets, broker.bars, per_cycle=breadth_per_cycle)
+        self.weather = MarketWeather(self.rules, weather_proxies, broker.bars, breadth) if weather_proxies else None
+        self.avwap_per_cycle = avwap_per_cycle
+        self._avwap: dict[str, tuple[str, list[Anchor] | None]] = {}
         self.earnings = earnings if earnings is not None else EarningsCalendar(journal)
         self._cmds: queue.Queue = queue.Queue()
         self._lock = threading.Lock()
@@ -130,9 +140,58 @@ class TradingService:
         hit = self._atr.get(inst.con_id)
         if hit and hit[0] == today:
             return hit[1]
-        value = self.broker.daily_atr(inst)
+        try:
+            value = self.broker.daily_atr(inst)
+        except PacingDeferred:
+            return hit[1] if hit else None           # yesterday's range until today's bars arrive
+        except Exception:
+            value = None
         self._atr[inst.con_id] = (today, value)
         return value
+
+    def _anchors_for(self, inst: Instrument, today) -> list[Anchor] | None:
+        """Anchored VWAP levels for today (the levels don't move intraday; distances do)."""
+        hit = self._avwap.get(inst.key)
+        if hit and hit[0] == today.isoformat():
+            return hit[1]
+        try:
+            bars = self.broker.bars(inst.symbol if inst.market == "US" else inst.key)
+        except PacingDeferred:
+            return hit[1] if hit else None
+        except Exception:
+            self._avwap[inst.key] = (today.isoformat(), None)
+            return None
+        e = self.journal.earnings().get(inst.key)
+        past = e["date"] if e and e["date"] and e["date"] < today else None
+        anchors = anchored_vwaps(bars, None, past)
+        self._avwap[inst.key] = (today.isoformat(), anchors)
+        return anchors
+
+    def _avwap_view(self, inst: Instrument, last: float | None, atr: float | None) -> dict | None:
+        hit = self._avwap.get(inst.key)
+        anchors = hit[1] if hit else None
+        if not anchors or last is None:
+            return None
+        live = [Anchor(a.kind, a.label, a.date, a.avwap, last / a.avwap - 1, a.gap) for a in anchors]
+        pb = pullback_level(live, last, atr)
+        return {"anchors": [a.as_dict() for a in live], "pullback": pb.as_dict() if pb else None}
+
+    def _avwap_step(self, today) -> None:
+        """Work out VWAP levels for a few more held and watched stocks this cycle."""
+        keys = [t.key for t in self.journal.open_trades()] + [w["key"] for w in self.journal.watchlist()]
+        n = 0
+        for key in dict.fromkeys(keys):
+            inst = self._inst_key.get(key)
+            hit = self._avwap.get(key)
+            if inst is None or (hit and hit[0] == today.isoformat()):
+                continue
+            if n >= self.avwap_per_cycle:
+                return
+            before = self._avwap.get(key)
+            self._anchors_for(inst, today)
+            if self._avwap.get(key) is before:        # deferred for pacing: try next cycle
+                return
+            n += 1
 
     def _usd(self, currency: str) -> float:
         if currency not in self._fx:
@@ -214,6 +273,10 @@ class TradingService:
                 self.weather.refresh(today)
             except Exception as exc:
                 self.emit("warn", "weather", f"Market weather unavailable: {exc}", once=True)
+        try:
+            self._avwap_step(today)
+        except Exception as exc:
+            self.emit("warn", "avwap", f"Anchored VWAP unavailable: {exc}", once=True)
         try:
             keys = [w["key"] for w in self.journal.watchlist()] + [t.key for t in self.journal.open_trades()]
             self.earnings.refresh(list(dict.fromkeys(keys)), today)
@@ -379,6 +442,7 @@ class TradingService:
                 "tries_left": st.tries_left, "locked": st.locked, "manual_lock": st.manual,
                 "unlocks_on": st.unlocks_on.isoformat() if st.unlocks_on else None,
                 "earnings": upcoming.get(w["key"]),
+                "avwap": self._avwap_view(inst, self._quotes.get(inst.con_id), a) if inst else None,
                 "error": err[0] if err else None,
             })
 
@@ -501,6 +565,8 @@ class TradingService:
         plan = plan_entry(inst, last, a, chosen, self.rules, rate, limit=limit, risk_usd=budget)
         ctx = self._context(inst, today, is_add=add, add_problem=add_problem, suggested=suggested,
                             confirmed=bool(confirmed) or bucket is not None, live=live)
+        self._anchors_for(inst, today)
+        ctx.avwap = self._avwap_view(inst, last, a)
         out = check_entry(plan, inst, rules=self.rules, ctx=ctx).as_dict()
         out["instrument"] = {"key": inst.key, "symbol": inst.symbol, "market": inst.market,
                              "market_name": MARKETS[inst.market].name, "name": inst.description,
@@ -508,6 +574,7 @@ class TradingService:
                              "decimals": inst.decimals(last), "inverse": inst.inverse, "leverage": inst.leverage}
         out["orders_enabled"] = self.orders_enabled
         out["is_add"] = add
+        out["avwap"] = ctx.avwap
         return out
 
     def _send_buy(self, checked: dict, role: str, ref_id: int, expect_qty: int | None, verb: str) -> dict:

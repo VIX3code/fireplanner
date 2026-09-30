@@ -38,7 +38,8 @@ changed on the dashboard's Settings card.
 | Add to a winner | **one** add, only once the stop is at entry or better, sized for the same fixed loss; the whole position's stop moves up so it still risks about one fixed loss |
 | Time stop ⚙ | a position that hasn't reached **+5% within 4 weeks** is flagged (or sold, with `time_stop_action: sell`) |
 | Earnings ⚙ | shown beside every stock; a buy within **7 days** of a report is warned (or blocked, with `earnings_block: true`) |
-| Market weather | new buys in a **Defensive** market risk half the fixed loss; **Risk-Off** blocks them |
+| Market weather | regime blended with breadth per market; new buys in a **Defensive** market risk half the fixed loss, **Risk-Off** blocks them |
+| Anchored VWAP | earnings / breakout / swing-low VWAP levels in the check; the nearest below the price is offered as a **pullback limit** |
 | Sector cap | at most **4** positions in one industry group |
 | Open-risk cap | the book can't lose more than **$5,000** if every stop hits at once |
 | Swing guide | a **warning** when Volatile would drive more than 50% of the book's daily swing |
@@ -129,6 +130,9 @@ be confirmed against a real paper account:
 - [ ] **Sectors** come from IBKR's industry category. Check they group the way you think of your
   themes, and override any with the API (`POST /api/sector`).
 - [ ] **An add** on paper moves the whole position's stop up, as the activity feed says.
+- [ ] **Breadth baskets** resolve at IBKR: after the first hour the weather cards should read
+  "30 of 30 big stocks" (US) and so on. A ticker IBKR lists differently (London names with a
+  trailing dot, for example) is skipped; replace it under `trading.breadth.baskets`.
 
 ---
 
@@ -167,11 +171,48 @@ stops up) and the repair of missing stops, so run it on an always-on machine.
 
 ## Market weather
 
-The analysis side's regime model, run once a day per market on an index proxy (`trading.weather`
-in the config): SPY with VIX, equal-weight breadth and the VIX curve for the US; `ISF:LN`,
-`2800:HK`, `ES3:SG` and `1306:JP` (trend and drawdown) for the others. A new buy's fixed loss is
-multiplied by its market's reading: Risk-On, Constructive and Neutral × 1, Defensive × 0.5,
-Risk-Off × 0. Open positions are never touched by the weather; their stops do that job.
+Each market's weather is the analysis side's regime model blended with **breadth**, run once a
+day per market:
+
+- **Regime** (75%): the index proxy in `trading.weather`. For the US that's SPY with VIX,
+  equal-weight breadth and the VIX curve; for the others (`ISF:LN`, `2800:HK`, `ES3:SG`,
+  `1306:JP`), trend and drawdown.
+- **Breadth** (25%, `breadth_weight`): the share of the market's big stocks above their 20, 50
+  and 200-day averages (weighted 0.2 / 0.4 / 0.4), from a basket of 18–30 large constituents per
+  market. An index can hold up on a few giants while most stocks fall; breadth shows that. The
+  baskets are in `trading/breadth.py` and can be replaced under `trading.breadth.baskets`.
+
+A new buy's fixed loss is multiplied by its market's label: Risk-On, Constructive and Neutral × 1,
+Defensive × 0.5, Risk-Off × 0. Open positions are never touched by the weather; their stops do
+that job.
+
+**IBKR pacing.** IBKR allows about 60 historical-data requests per 10 minutes. Every stock's
+daily bars are fetched once a day and reused for its daily range, its VWAP levels and breadth;
+the basket is read 8 stocks per cycle; and when the budget runs short, requests wait for a later
+cycle instead of failing. On a cold start the full picture fills in over roughly the first half
+hour; positions come first.
+
+## Anchored VWAP: where to buy a pullback
+
+An anchored VWAP is the volume-weighted average price since a day that mattered: the cost basis
+of everyone who bought because of it. Buyers defend it, so a pullback to it is a common swing
+entry, and a price below it means those buyers are losing money and tend to sell into rallies.
+
+Three anchors, from each stock's daily bars:
+
+- **Earnings**: the report day, if you've entered its date, or else the most recent **gap day**
+  (opened at least 4% away on twice the usual volume, usually the earnings reaction).
+- **Breakout**: the first close above the prior 50 days' high after at least 10 quiet sessions,
+  i.e. the start of the latest leg up (not simply yesterday's new high).
+- **Swing low**: the lowest low of the last 60 sessions.
+
+The watchlist shows each stock's **pullback level**: the nearest of these below the price, if it
+is within three average days' range. The trade check lists all three with their distance, and
+**Use as limit** re-checks the trade with a limit at that level. The stop is then set from that
+lower price, so the same $250 fixed loss buys more shares. The check also warns when the price is
+**below** a breakout or gap-up VWAP, and notes when it's **extended** with no support within reach.
+
+Dashboard buys are day orders, so a pullback limit that doesn't fill today needs placing again.
 
 ## Earnings dates
 
@@ -195,16 +236,18 @@ trades in a group it starts to mean something. `GET /api/journal.csv` downloads 
 - **header:** mode (paper, LIVE, simulated), orders on or dry run, how many positions have a stop,
   and whether buys are paused
 - **the book:** positions, invested vs the limit, open P/L, what every stop hitting would lose
-- **market weather** per market, and **circuit breakers** with Pause / Resume / Kill switch
+- **market weather** per market (regime and breadth: % of big stocks above their 20/50/200-day), and
+  **circuit breakers** with Pause / Resume / Kill switch
 - **bucket mix:** money and daily swing per type, positions left per bucket, positions per sector
 - **open positions:** stop (at entry, trailing, and what it risks), target, progress, flags
   (time stop, earnings, strikes, added) and **Add** / **Sell** buttons
-- **check a new trade:** sizing, stop, target and every rule with its result, a setup tag and a
-  note, then **Send → Confirm**
+- **check a new trade:** sizing, stop, target, the anchored-VWAP levels with **Use as limit**,
+  every rule with its result, a setup tag and a note, then **Send → Confirm**
 - **two-strike tracker** with **Unlock**, and **activity** (every order and alert)
 - **journal:** expectancy for all trades, the last 7 and 30 days, by type and setup, and every
   closed trade
-- **watchlist:** add or remove tickers, confirm types, set earnings dates, see what is locked
+- **watchlist:** add or remove tickers, pullback level, confirm types, set earnings dates, see what
+  is locked
 - **settings:** time-stop weeks and gain, earnings window, fixed loss
 
 **From your phone:** don't expose the port. Put it behind the Caddy proxy in `deploy/` (TLS and a
