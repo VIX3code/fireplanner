@@ -118,3 +118,59 @@ backtest:
   # diversification rule, and applying it here would leave 90% in cash and make
   # the buy-and-hold comparison meaningless.
   position_cap_pct: 1.00
+
+# ---------------------------------------------------------------------------
+# Trade management: `fireplanner trade ...`
+#
+# The guardian places a GTC stop and a target on every position the moment it
+# fills (bought from the dashboard or directly in TWS / the IBKR app), moves
+# the stop up as the trade works, and never moves it down.
+# ---------------------------------------------------------------------------
+trading:
+  enabled: false              # false = dry run: every order is logged, none is sent
+  allow_live: false           # refuse the live ports (4001 / 7496) until true
+  journal: data/trading/journal.sqlite   # trade history; keep it, never commit it
+  guardian:
+    client_id: 23             # fixed, so a restarted guardian can still move its own stops
+    interval_seconds: 30      # a fill wakes it immediately; this is the heartbeat
+  dashboard:
+    host: 127.0.0.1           # put it behind deploy/Caddyfile to reach it from a phone
+    port: 8765
+
+  # Sizing: one slot per trade, converted to the stock's currency, whole lots only.
+  slot_usd: 5000
+  max_slots: 20
+  base_currency: USD
+
+  # Stop: the tighter of max_stop_pct and atr_stop_mult x the average daily range.
+  max_stop_pct: 0.05
+  atr_stop_mult: 2.5
+  outside_rth: false          # stops trigger in regular trading hours only
+  # Ratchet: to the entry price at +5%, then trail 3 ATRs under the high.
+  breakeven_at: 0.05
+  atr_trail_mult: 3.0
+  take_half_at_target: true   # sell half at the target, trail the rest
+
+  # Two strikes: after a stop-out you may re-enter once; two in a row lock the stock.
+  max_strikes: 2
+  lockout_days: 10            # trading days
+  strike_loss_pct: 0.005      # exits within 0.5% of entry are scratches, not strikes
+
+  one_position_per_stock: true
+  entry_limit_buffer: 0.005   # a dashboard buy is a limit 0.5% above the last price
+  swing_guide: 0.50           # warn when Volatile drives >50% of the daily swing
+
+  # Stock types. max_atr = average daily range (fraction of price) below which a
+  # stock is suggested for that type. cap = most open positions of that type.
+  buckets:
+    steady:   {name: Steady,   max_atr: 0.020, target: 0.10, cap: 20}
+    core:     {name: Core,     max_atr: 0.035, target: 0.15, cap: 10}
+    volatile: {name: Volatile, max_atr: null,  target: 0.20, cap: 5}
+
+  # Starting watchlist; add more on the dashboard or with `fireplanner trade watch`.
+  # A bare ticker is US. Others: 700:HK, D05:SG, 7203:JP, HSBA:LN.
+  watchlist: [NVDA, ZS, MP, FTNT]
+  # Hong Kong board lots differ per stock. IBKR usually reports them; set any it doesn't.
+  lot_sizes: {}
+  # Only used if IBKR can't quote the rate. USD per 1 unit.
+  fx_fallback: {GBP: 1.27, HKD: 0.128, SGD: 0.77, JPY: 0.0067}

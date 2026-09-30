@@ -21,6 +21,7 @@ fireplanner backtest SPY --core-weight 0.4           # strategy vs buy-and-hold
 fireplanner dashboard SPY NVDA ZS -o dashboard.html  # the full analysis page
 fireplanner publish SPY --single --redact -o site    # both pages in one file, safe to host
 fireplanner notify                                   # Telegram, only when it changes
+fireplanner trade run                                # stops, targets and the live Swing Desk
 ```
 
 Two pages, deliberately separate. **`desk`** answers *what should I do today* — one
@@ -333,6 +334,31 @@ the regime cap · backtest evidence with the caveats above printed next to the n
 
 ---
 
+## Trade management — the Swing Desk
+
+`fireplanner trade` manages positions once you act on a signal, across US, London, Hong Kong,
+Singapore and Tokyo listings:
+
+- **$5,000 per trade, 20 at most**, in whole shares or board lots, converted at the day's rate.
+- **A GTC stop on every position the moment it fills**, whether bought on the dashboard, in TWS
+  or in the IBKR app: the tighter of 5% or 2.5 × the daily range. Half comes off at the target;
+  the stop moves to entry at +5%, then trails. It never moves down.
+- **Three stock types.** Steady (+10%), Core (+15%) and Volatile (+20%, at most 5 open), with the
+  bucket mix shown by money **and** by daily swing. The swing view is the one that shows
+  concentration.
+- **Two strikes per stock:** a second stop-out in a row locks it for 10 trading days.
+- **A pre-trade check** behind every dashboard buy, and a live dashboard to run it from.
+
+```bash
+fireplanner trade demo -o swing_desk.html      # try it on a simulated book, no IBKR needed
+fireplanner --port 4002 trade run              # paper account; dry run until trading.enabled: true
+```
+
+It starts in dry run on a paper account and refuses live ports until you opt in. Setup, the
+full rules, the five markets and a paper checklist: **[docs/TRADING.md](docs/TRADING.md)**.
+
+---
+
 ## Deploying it
 
 **IBKR's API is not a cloud API.** Both transports need a long-lived, interactively
@@ -393,14 +419,25 @@ src/fireplanner/
                  single.py  both of the above as one file, behind a tab strip
                  charts.py  inline-SVG chart primitives, no chart library
   publish.py     static site output + redaction of every account figure
-tests/           121 tests
+  trading/       rules.py   the trading policy from config.yaml
+                 markets.py US / London / HK / Singapore / Tokyo: lots, ticks, pence
+                 sizing.py  $5k slots in whole lots, the stop and the target
+                 buckets.py Steady / Core / Volatile by money and by daily swing
+                 strikes.py two stop-outs in a row lock a stock
+                 gate.py    the pre-trade check
+                 guardian.py no position without a stop; stops only move up
+                 sync.py    keeps the journal in step with the broker
+                 journal.py SQLite: trades, exits, alerts, watchlist
+                 service.py the loop; server.py the live dashboard
+                 sim.py     in-memory broker; ib_broker.py TWS / IB Gateway
+tests/           189 tests
 data/snapshots/  real IBKR pulls: SPY, VIX, RSP, NVDA, ZS, MP, FTNT + account state
 ```
 
 ## Correctness
 
 ```bash
-PYTHONPATH=src python3 -m pytest tests/ -q      # 121 passed
+PYTHONPATH=src python3 -m pytest tests/ -q      # 189 passed
 ```
 
 The tests that matter most:
@@ -435,8 +472,8 @@ range and is bounded by the discrepancy.
 
 - **Real breadth.** `universe_breadth()` takes a wide frame of closes and returns % above 50/200-day.
   Feed it actual S&P 500 constituents rather than the RSP/SPY proxy.
-- **Order staging.** `GatewayProvider` connects `readonly=True`. Bracket orders from
-  `PositionPlan` (entry + ATR stop + R-multiple targets) are the natural next step.
+- **Signals into the Swing Desk.** The trade check sizes and protects a position but doesn't use
+  the model's score. Showing each watchlist name's score beside its check is a small next step.
 - **Core rebalancing.** The core is currently bought once and held. A quarterly rebalance back to
   target weight would be more realistic, and would let the tactical sleeve harvest into strength.
 

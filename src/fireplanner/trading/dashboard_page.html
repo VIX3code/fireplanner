@@ -1,0 +1,660 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Swing Desk</title>
+<style>
+/* Layout: a trading-desk console. Status strip, bucket mix as the centrepiece, the open
+   book full width, then the pre-trade check, watchlist, strikes and activity. */
+:root{
+  --bg:#f1f4f8; --surface:#fbfcfd; --inset:#f6f8fb; --ink:#0e1420; --ink-2:#465063; --muted:#6b7485;
+  --line:#e1e5ec; --axis:#c5ccd7;
+  --b-steady:#86b6ef; --b-core:#2a78d6; --b-volatile:#104281;
+  --on-steady:#0e1420; --on-core:#ffffff; --on-volatile:#ffffff;
+  --up:#006300; --down:#b42f2f;
+  --good:#0ca30c; --warn:#fab219; --crit:#d03b3b;
+  --good-ink:#0b6b0b; --warn-ink:#7a5200; --crit-ink:#a82828;
+  --tip-shadow:0 6px 20px rgba(14,20,32,.14);
+  --font-ui:ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  --font-data:ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
+  --r:10px;
+  color-scheme:light;
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    --bg:#0d1015; --surface:#161a20; --inset:#1b2028; --ink:#eef1f5; --ink-2:#b4bccb; --muted:#8a93a3;
+    --line:#262c36; --axis:#3a424e;
+    --b-steady:#1c5cab; --b-core:#3987e5; --b-volatile:#9ec5f4;
+    --on-steady:#ffffff; --on-core:#0e1420; --on-volatile:#0e1420;
+    --up:#3fbf5a; --down:#ff7b72; --good-ink:#4cd04c; --warn-ink:#fab219; --crit-ink:#ff7b72;
+    --tip-shadow:0 6px 20px rgba(0,0,0,.5); color-scheme:dark;
+  }
+}
+:root[data-theme="dark"]{
+  --bg:#0d1015; --surface:#161a20; --inset:#1b2028; --ink:#eef1f5; --ink-2:#b4bccb; --muted:#8a93a3;
+  --line:#262c36; --axis:#3a424e;
+  --b-steady:#1c5cab; --b-core:#3987e5; --b-volatile:#9ec5f4;
+  --on-steady:#ffffff; --on-core:#0e1420; --on-volatile:#0e1420;
+  --up:#3fbf5a; --down:#ff7b72; --good-ink:#4cd04c; --warn-ink:#fab219; --crit-ink:#ff7b72;
+  --tip-shadow:0 6px 20px rgba(0,0,0,.5); color-scheme:dark;
+}
+*{box-sizing:border-box}
+html,body{margin:0}
+body{background:var(--bg);color:var(--ink);font-family:var(--font-ui);font-size:14px;line-height:1.45}
+[hidden]{display:none!important}
+.wrap{max-width:1200px;margin:0 auto;padding-inline:16px;padding-block:20px 40px;display:grid;gap:16px}
+@media (min-width:720px){.wrap{padding-inline:24px}}
+h1,h2{margin:0;text-wrap:balance}
+h1{font-size:22px;font-weight:700;letter-spacing:-.01em}
+h2{font-size:16px;font-weight:600}
+p{margin:0}
+.top{display:flex;flex-wrap:wrap;align-items:flex-end;justify-content:space-between;gap:10px 16px}
+.top .sub{color:var(--ink-2);margin-top:2px}
+.tags{display:flex;flex-wrap:wrap;gap:6px;align-items:center}
+.tag{font-size:12px;font-weight:500;color:var(--ink-2);border:1px solid var(--line);border-radius:999px;padding:2px 9px;background:var(--surface)}
+.tag.live{color:var(--crit-ink);border-color:color-mix(in srgb,var(--crit) 45%,transparent);font-weight:700}
+.chip{display:inline-flex;align-items:center;gap:5px;padding:2px 9px;border-radius:999px;font-size:12px;font-weight:600;border:1px solid;white-space:nowrap}
+.chip .ic{font-size:11px;line-height:1}
+.chip.good{color:var(--good-ink);background:color-mix(in srgb,var(--good) 12%,transparent);border-color:color-mix(in srgb,var(--good) 38%,transparent)}
+.chip.warn{color:var(--warn-ink);background:color-mix(in srgb,var(--warn) 16%,transparent);border-color:color-mix(in srgb,var(--warn) 50%,transparent)}
+.chip.crit{color:var(--crit-ink);background:color-mix(in srgb,var(--crit) 11%,transparent);border-color:color-mix(in srgb,var(--crit) 40%,transparent)}
+.chip.info{color:var(--ink-2);background:var(--inset);border-color:var(--line)}
+.card{background:var(--surface);border:1px solid var(--line);border-radius:var(--r);padding:18px;min-width:0}
+.banner{border-radius:var(--r);padding:10px 14px;font-weight:500;border:1px solid}
+.banner.crit{color:var(--crit-ink);background:color-mix(in srgb,var(--crit) 10%,var(--surface));border-color:color-mix(in srgb,var(--crit) 40%,transparent)}
+.kpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:12px}
+.kpi{background:var(--surface);border:1px solid var(--line);border-radius:var(--r);padding:14px 16px;display:grid;gap:2px}
+.kpi .label{font-size:12.5px;color:var(--muted)}
+.kpi .value{font-size:26px;font-weight:600;letter-spacing:-.01em}
+.kpi .note{font-size:12.5px;color:var(--ink-2)}
+.up{color:var(--up)} .down{color:var(--down)}
+.sec-head{display:flex;flex-wrap:wrap;justify-content:space-between;gap:8px 16px;align-items:flex-start}
+.insight{font-size:15px;margin-top:6px;max-width:62ch}
+.insight b{font-weight:600}
+.why{font-size:13px;color:var(--ink-2);margin-top:4px;max-width:70ch}
+.legend{display:flex;flex-wrap:wrap;gap:6px 18px;font-size:13px;color:var(--ink-2);margin:16px 0 10px}
+.legend span{display:inline-flex;align-items:center;gap:7px}
+.sw{width:12px;height:12px;border-radius:3px;display:inline-block;flex:none}
+.sw.steady{background:var(--b-steady)} .sw.core{background:var(--b-core)} .sw.volatile{background:var(--b-volatile)}
+.bars{display:grid;gap:14px}
+.bar-row{display:grid;grid-template-columns:180px minmax(0,1fr);gap:14px;align-items:center}
+@media (max-width:560px){.bar-row{grid-template-columns:1fr;gap:6px}}
+.bar-label{font-weight:500}
+.bar-label small{display:block;color:var(--muted);font-weight:400;font-size:12px}
+.stack{display:flex;gap:2px;height:32px;min-width:0;background:var(--inset);border-radius:4px}
+.stack .empty{flex:1;display:flex;align-items:center;justify-content:center;color:var(--muted);font-size:12.5px}
+.seg{height:100%;display:flex;align-items:center;justify-content:center;font-size:12.5px;font-weight:600;min-width:0;cursor:default}
+.seg:first-child{border-radius:4px 0 0 4px} .seg:last-child{border-radius:0 4px 4px 0}
+.seg:hover{filter:brightness(1.1)}
+.seg:focus-visible{outline:2px solid var(--ink);outline-offset:2px}
+.seg.steady{background:var(--b-steady);color:var(--on-steady)}
+.seg.core{background:var(--b-core);color:var(--on-core)}
+.seg.volatile{background:var(--b-volatile);color:var(--on-volatile)}
+.seg span{white-space:nowrap;padding-inline:6px}
+.buckets{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px;margin-top:20px}
+@media (max-width:860px){.buckets{grid-template-columns:1fr}}
+.bucket{border:1px solid var(--line);border-radius:8px;padding:14px;display:grid;gap:12px;background:var(--inset);align-content:start}
+.bucket-head{display:flex;justify-content:space-between;align-items:flex-start;gap:8px;flex-wrap:wrap}
+.bname{display:flex;align-items:center;gap:8px;font-weight:600;font-size:15px}
+.brule{font-size:12.5px;color:var(--muted);margin-top:2px}
+.pips{display:flex;flex-wrap:wrap;gap:3px}
+.pip{width:12px;height:12px;border-radius:3px;border:1.5px solid var(--axis)}
+.pip.on.steady{background:var(--b-steady);border-color:var(--b-steady)}
+.pip.on.core{background:var(--b-core);border-color:var(--b-core)}
+.pip.on.volatile{background:var(--b-volatile);border-color:var(--b-volatile)}
+.slots-text{font-size:13px;color:var(--ink-2);margin-top:6px}
+.bstats{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px}
+.bstats small{display:block;font-size:11.5px;color:var(--muted)}
+.bstats b{font-weight:600;font-variant-numeric:tabular-nums}
+.rules-line{margin-top:14px;font-size:12.5px;color:var(--muted)}
+.two{display:grid;grid-template-columns:minmax(0,1.15fr) minmax(0,1fr);gap:16px;align-items:start}
+@media (max-width:900px){.two{grid-template-columns:1fr}}
+.stackcol{display:grid;gap:16px;min-width:0}
+.filters{display:flex;gap:6px;flex-wrap:wrap}
+button{font:inherit}
+.fbtn{font-size:13px;padding:4px 12px;border-radius:999px;border:1px solid var(--line);background:transparent;color:var(--ink-2);cursor:pointer;display:inline-flex;align-items:center;gap:6px}
+.fbtn:hover{border-color:var(--axis);color:var(--ink)}
+.fbtn[aria-pressed="true"]{background:var(--ink);color:var(--surface);border-color:var(--ink)}
+.btn{font-size:13.5px;font-weight:600;padding:8px 14px;border-radius:8px;border:1px solid var(--ink);background:var(--ink);color:var(--surface);cursor:pointer}
+.btn.ghost{background:transparent;color:var(--ink);border-color:var(--line)}
+.btn.small{font-size:12.5px;padding:4px 10px;border-radius:6px}
+.btn.danger{background:var(--crit);border-color:var(--crit);color:#fff}
+.btn:disabled{opacity:.45;cursor:not-allowed}
+.btn:focus-visible,.fbtn:focus-visible,input:focus-visible,select:focus-visible{outline:2px solid var(--b-core);outline-offset:2px}
+.table-wrap{overflow-x:auto;margin-top:14px}
+table{width:100%;border-collapse:collapse;font-size:13px}
+table.book{min-width:900px}
+th{font-weight:500;color:var(--muted);text-align:right;padding:8px 10px;border-bottom:1px solid var(--line);white-space:nowrap;font-size:12px}
+td{padding:9px 10px;border-bottom:1px solid var(--line);text-align:right;font-variant-numeric:tabular-nums;white-space:nowrap;vertical-align:middle}
+tbody tr:last-child td{border-bottom:0}
+th:first-child,td:first-child{text-align:left}
+th.center,td.center{text-align:center}
+.tick{display:inline-flex;align-items:center;gap:8px;font-family:var(--font-data);font-weight:600}
+.small{display:block;font-size:11.5px;color:var(--muted);font-weight:400}
+.ok-small{display:block;font-size:11.5px;color:var(--good-ink);font-weight:500}
+.empty-row{color:var(--muted);text-align:center!important;padding:22px}
+.track{position:relative;width:140px;height:16px;margin-left:auto}
+.track .rail{position:absolute;left:0;right:0;top:7px;height:2px;background:var(--line);border-radius:2px}
+.track .entry{position:absolute;top:3px;width:2px;height:10px;margin-left:-1px;background:var(--axis);border-radius:1px}
+.track .fill{position:absolute;top:7px;height:2px;border-radius:2px}
+.track .fill.up{background:var(--up)} .track .fill.down{background:var(--down)}
+.track .dot{position:absolute;top:3px;width:10px;height:10px;border-radius:50%;margin-left:-5px;box-shadow:0 0 0 2px var(--surface)}
+.track .dot.up{background:var(--up)} .track .dot.down{background:var(--down)}
+.track-ends{display:flex;justify-content:space-between;width:140px;margin-left:auto;font-size:10.5px;color:var(--muted)}
+.form{display:grid;grid-template-columns:minmax(0,1.4fr) minmax(0,1fr) minmax(0,.9fr) auto;gap:8px;margin-top:12px;align-items:end}
+@media (max-width:560px){.form{grid-template-columns:1fr 1fr}}
+.field{display:grid;gap:5px;min-width:0}
+.field label{font-size:12px;color:var(--muted)}
+input,select{font:inherit;font-size:14px;color:var(--ink);background:var(--inset);border:1px solid var(--line);border-radius:8px;padding:7px 9px;width:100%;min-width:0}
+.verdict{margin-top:14px;display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.verdict .chip{font-size:13px;padding:4px 11px}
+.order{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px 14px;margin-top:14px;padding:12px;background:var(--inset);border:1px solid var(--line);border-radius:8px}
+.order small{display:block;font-size:11.5px;color:var(--muted)}
+.order b{font-weight:600;font-variant-numeric:tabular-nums}
+.checks{list-style:none;margin:14px 0 0;padding:0;display:grid;gap:9px}
+.checks li{display:grid;grid-template-columns:20px minmax(0,1fr);gap:8px;font-size:13px;align-items:start}
+.mark{width:18px;height:18px;border-radius:50%;display:grid;place-items:center;font-size:11px;font-weight:700;margin-top:1px}
+.mark.good{background:color-mix(in srgb,var(--good) 16%,transparent);color:var(--good-ink)}
+.mark.warn{background:color-mix(in srgb,var(--warn) 22%,transparent);color:var(--warn-ink)}
+.mark.crit{background:color-mix(in srgb,var(--crit) 15%,transparent);color:var(--crit-ink)}
+.mark.info{background:var(--inset);color:var(--ink-2);border:1px solid var(--line)}
+.checks .t{font-weight:500}
+.checks .d{display:block;color:var(--ink-2)}
+.actions{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin-top:14px}
+.msg{font-size:13px;margin-top:10px;color:var(--ink-2)}
+.msg.err{color:var(--crit-ink)} .msg.ok{color:var(--good-ink)}
+.hint{font-size:12px;color:var(--muted);margin-top:12px}
+.list{list-style:none;margin:12px 0 0;padding:0;display:grid}
+.list li{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:4px 10px;padding:10px 0;border-top:1px solid var(--line);align-items:center}
+.list li:first-child{border-top:0}
+.who{display:flex;align-items:center;gap:8px;font-family:var(--font-data);font-weight:600}
+.what{grid-column:1 / -1;font-size:12.5px;color:var(--ink-2)}
+.feed{list-style:none;margin:12px 0 0;padding:0;display:grid;gap:8px;max-height:420px;overflow:auto}
+.feed li{display:grid;grid-template-columns:20px 64px minmax(0,1fr);gap:8px;font-size:12.5px;align-items:start}
+.feed time{color:var(--muted);font-variant-numeric:tabular-nums}
+.wl td .rowbtns{display:inline-flex;gap:6px}
+.wl select{padding:4px 6px;font-size:12.5px;width:auto}
+.typ{display:inline-flex;align-items:center;gap:6px}
+.typ .small,.typ .ok-small{display:inline}
+.notes{font-size:12.5px;color:var(--ink-2);display:grid;gap:6px}
+.notes ul{margin:0;padding-left:18px;display:grid;gap:4px;max-width:95ch}
+.tip{position:fixed;z-index:20;pointer-events:none;background:var(--surface);color:var(--ink);border:1px solid var(--line);box-shadow:var(--tip-shadow);border-radius:8px;padding:8px 10px;font-size:12.5px;min-width:170px}
+.tip .v{font-size:15px;font-weight:600;font-variant-numeric:tabular-nums}
+.tip .n{display:flex;align-items:center;gap:6px;color:var(--ink-2)}
+.tip .k{width:12px;height:3px;border-radius:2px}
+.tip .x{color:var(--muted);margin-top:2px}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header class="top">
+    <div>
+      <h1>Swing Desk</h1>
+      <p class="sub">Allocation by stock type, and every position protected by a stop</p>
+    </div>
+    <div class="tags" id="tags"></div>
+  </header>
+  <div id="banner" class="banner crit" hidden></div>
+
+  <section class="kpis" id="kpis" aria-label="Book summary"></section>
+
+  <section class="card" aria-labelledby="mix-h">
+    <div class="sec-head">
+      <div>
+        <h2 id="mix-h">Bucket mix</h2>
+        <p class="insight" id="insight"></p>
+        <p class="why" id="why"></p>
+      </div>
+      <span id="mix-status"></span>
+    </div>
+    <div class="legend" id="legend"></div>
+    <div class="bars">
+      <div class="bar-row">
+        <div class="bar-label">Share of money<small>market value of open positions</small></div>
+        <div class="stack" id="stack-money" role="group" aria-label="Share of money by stock type"></div>
+      </div>
+      <div class="bar-row">
+        <div class="bar-label">Share of daily swing<small>value × average daily range</small></div>
+        <div class="stack" id="stack-swing" role="group" aria-label="Share of daily swing by stock type"></div>
+      </div>
+    </div>
+    <div class="buckets" id="buckets"></div>
+    <p class="rules-line" id="rules-line"></p>
+  </section>
+
+  <section class="card" aria-labelledby="book-h">
+    <div class="sec-head">
+      <h2 id="book-h">Open positions</h2>
+      <div class="filters" id="filters" role="group" aria-label="Filter by stock type"></div>
+    </div>
+    <div class="table-wrap">
+      <table class="book">
+        <thead><tr>
+          <th scope="col">Stock</th><th scope="col">Shares</th><th scope="col">Entry</th><th scope="col">Last</th>
+          <th scope="col">Profit / loss</th><th scope="col">Stop</th><th scope="col">Target</th>
+          <th scope="col">Stop → target</th><th scope="col" class="center">Protected</th>
+          <th scope="col" class="center">Stop-outs</th><th scope="col">Days</th>
+        </tr></thead>
+        <tbody id="rows"></tbody>
+      </table>
+    </div>
+  </section>
+
+  <div class="two">
+    <section class="card" aria-labelledby="gate-h">
+      <h2 id="gate-h">Check a new trade</h2>
+      <form class="form" id="gate-form" autocomplete="off">
+        <div class="field">
+          <label for="gate-sym">Stock (e.g. NVDA, 700:HK, D05:SG, 7203:JP, HSBA:LN)</label>
+          <input id="gate-sym" list="gate-list" placeholder="Ticker">
+          <datalist id="gate-list"></datalist>
+        </div>
+        <div class="field">
+          <label for="gate-bucket">Stock type</label>
+          <select id="gate-bucket">
+            <option value="">Suggested</option>
+            <option value="steady">Steady</option>
+            <option value="core">Core</option>
+            <option value="volatile">Volatile</option>
+          </select>
+        </div>
+        <div class="field">
+          <label for="gate-limit">Limit price</label>
+          <input id="gate-limit" inputmode="decimal" placeholder="Auto">
+        </div>
+        <button class="btn" type="submit" id="gate-go">Check</button>
+      </form>
+      <div id="gate-out"></div>
+      <p class="hint">The check runs before every dashboard buy. A buy placed directly in TWS or the IBKR app can't be blocked; it gets its stop and target anyway, and an alert if it breaks a rule.</p>
+    </section>
+
+    <div class="stackcol">
+      <section class="card" aria-labelledby="strike-h">
+        <h2 id="strike-h">Two-strike tracker</h2>
+        <ul class="list" id="strikes"></ul>
+      </section>
+      <section class="card" aria-labelledby="feed-h">
+        <h2 id="feed-h">Activity</h2>
+        <ul class="feed" id="feed"></ul>
+      </section>
+    </div>
+  </div>
+
+  <section class="card" aria-labelledby="wl-h">
+    <div class="sec-head">
+      <h2 id="wl-h">Watchlist</h2>
+      <form class="filters" id="wl-form" autocomplete="off">
+        <input id="wl-sym" placeholder="Add ticker, e.g. 9988:HK" aria-label="Ticker to add" style="width:200px">
+        <input id="wl-lot" placeholder="Lot (HK only)" inputmode="numeric" aria-label="Board lot" style="width:120px">
+        <button class="btn small" type="submit" id="wl-add">Add</button>
+      </form>
+    </div>
+    <p class="msg" id="wl-msg" hidden></p>
+    <div class="table-wrap">
+      <table class="wl" style="min-width:760px">
+        <thead><tr>
+          <th scope="col">Stock</th><th scope="col">Last</th><th scope="col">Daily range</th>
+          <th scope="col">Stock type</th><th scope="col">Status</th><th scope="col">Source</th><th scope="col"></th>
+        </tr></thead>
+        <tbody id="wl-rows"></tbody>
+      </table>
+    </div>
+  </section>
+
+  <section class="notes card" aria-labelledby="notes-h">
+    <h2 id="notes-h">How the numbers work</h2>
+    <ul id="notes"></ul>
+  </section>
+</div>
+<div class="tip" id="tip" hidden></div>
+
+<script>
+const LIVE = /*__LIVE__*/false;
+let STATE = /*__STATE__*/null;
+(() => {
+  const $ = id => document.getElementById(id);
+  const BUCKET_NAMES = { steady: "Steady", core: "Core", volatile: "Volatile" };
+  const MARKET_SHORT = { US: "US", LSE: "London", SEHK: "Hong Kong", SGX: "Singapore", TSEJ: "Tokyo" };
+  let TOKEN = "";
+  try { const m = location.search.match(/[?&]token=([^&]+)/); if (m) { TOKEN = decodeURIComponent(m[1]); sessionStorage.setItem("fp-token", TOKEN); } else { TOKEN = sessionStorage.getItem("fp-token") || ""; } } catch (e) {}
+  let filter = "all";
+  try { filter = localStorage.getItem("fp-filter") || "all"; } catch (e) {}
+
+  // ---- formatting ----
+  const usd = (n, d = 0) => "$" + Math.abs(n).toLocaleString("en-US", { minimumFractionDigits: d, maximumFractionDigits: d });
+  const sUsd = n => (n > 0.5 ? "+" : n < -0.5 ? "−" : "") + usd(n);
+  const pct = (x, d = 0) => (x * 100).toFixed(d) + "%";
+  const sPct = (x, d = 1) => (x > 0 ? "+" : x < 0 ? "−" : "") + Math.abs(x * 100).toFixed(d) + "%";
+  const px = (n, d) => n == null ? "—" : Number(n).toLocaleString("en-US", { minimumFractionDigits: d ?? 2, maximumFractionDigits: d ?? 2 });
+  const el = (tag, cls, text) => { const e = document.createElement(tag); if (cls) e.className = cls; if (text != null) e.textContent = text; return e; };
+  const chip = (kind, icon, label) => { const c = el("span", "chip " + kind); c.append(el("span", "ic", icon), document.createTextNode(label)); return c; };
+  const swatch = id => { const s = el("span", "sw " + id); s.setAttribute("aria-hidden", "true"); return s; };
+  const fmtDate = iso => { const d = new Date(iso + (iso.length === 10 ? "T12:00:00" : "")); return d.toLocaleDateString("en-GB", { day: "numeric", month: "short" }); };
+
+  // ---- tooltip ----
+  const tip = $("tip");
+  function showTip(evt, v, n, x, id) {
+    tip.replaceChildren();
+    const nv = el("div", "n"); const k = el("span", "k"); k.style.background = `var(--b-${id})`; nv.append(k, document.createTextNode(n));
+    tip.append(el("div", "v", v), nv, el("div", "x", x)); tip.hidden = false;
+    let x0, y0;
+    if (evt.type === "focus") { const r = evt.target.getBoundingClientRect(); x0 = r.left + r.width / 2; y0 = r.bottom; } else { x0 = evt.clientX; y0 = evt.clientY; }
+    const w = tip.offsetWidth, h = tip.offsetHeight;
+    let left = x0 + 14, top = y0 + 14;
+    if (left + w > innerWidth - 8) left = x0 - w - 14;
+    if (top + h > innerHeight - 8) top = y0 - h - 14;
+    tip.style.left = Math.max(8, left) + "px"; tip.style.top = Math.max(8, top) + "px";
+  }
+  const hideTip = () => { tip.hidden = true; };
+
+  // ---- api ----
+  async function api(path, body) {
+    const headers = { "Content-Type": "application/json" };
+    if (TOKEN) headers["Authorization"] = "Bearer " + TOKEN;
+    const r = await fetch(path, { method: body ? "POST" : "GET", headers, body: body ? JSON.stringify(body) : undefined });
+    const data = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error(data.error || `HTTP ${r.status}`);
+    return data;
+  }
+
+  // ---- render: header ----
+  function renderHeader(s) {
+    const tags = $("tags"); tags.replaceChildren();
+    const mode = el("span", "tag" + (s.mode === "live" ? " live" : ""), s.mode === "live" ? "LIVE ACCOUNT" : s.mode === "paper" ? "Paper account" : "Simulated");
+    tags.append(mode);
+    tags.append(el("span", "tag", s.orders_enabled ? "Orders on" : "Dry run · orders off"));
+    const t = s.totals;
+    if (t.open === 0) tags.append(chip("info", "·", "No open positions"));
+    else if (t.protected === t.open) tags.append(chip("good", "✓", `${t.protected} of ${t.open} positions have a stop`));
+    else tags.append(chip("crit", "✕", `${t.open - t.protected} of ${t.open} positions have NO stop`));
+    const when = new Date(s.generated_at);
+    tags.append(el("span", "tag", (LIVE ? "Updated " : "Snapshot ") + when.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })));
+    const b = $("banner");
+    if (s.error) { b.textContent = "The guardian hit a problem: " + s.error; b.hidden = false; } else b.hidden = true;
+  }
+
+  function renderKpis(s) {
+    const t = s.totals, box = $("kpis"); box.replaceChildren();
+    const k = [
+      { label: "Slots used", value: `${t.slots_used} of ${t.max_slots}`, note: `${t.max_slots - t.slots_used} free · ${usd(s.rules.slot_usd)} each` },
+      { label: "Invested now", value: usd(t.invested_usd), note: t.cash_usd != null ? `${usd(t.cash_usd)} cash available` : `of ${usd(t.max_slots * s.rules.slot_usd)} capacity` },
+      { label: "Open profit / loss", value: sUsd(t.pl_usd), cls: t.pl_usd >= 0 ? "up" : "down", note: `${sPct(t.pl_pct)} on cost` },
+      { label: "Lost if every stop hits", value: usd(t.risk_usd), note: `${t.moved} stop${t.moved === 1 ? "" : "s"} already at or above entry` },
+    ];
+    k.forEach(x => { const d = el("div", "kpi"); d.append(el("span", "label", x.label), el("span", "value" + (x.cls ? " " + x.cls : ""), x.value), el("span", "note", x.note)); box.append(d); });
+  }
+
+  function renderMix(s) {
+    const B = s.buckets, total = B.reduce((a, b) => a + b.value_usd, 0);
+    const vol = B.find(b => b.id === "volatile"), steady = B.find(b => b.id === "steady");
+    const ins = $("insight"); ins.replaceChildren();
+    const why = $("why"); why.textContent = "";
+    const st = $("mix-status"); st.replaceChildren();
+    if (total > 0) {
+      ins.append("Volatile holds ", el("b", null, pct(vol.money_share)), " of your money but drives ", el("b", null, pct(vol.swing_share)), " of your daily swing.");
+      const avg = b => b.value_usd ? b.swing_usd / b.value_usd : 0;
+      if (avg(vol) && avg(steady)) why.textContent = `A Volatile stock moves about ${(avg(vol) / avg(steady)).toFixed(1)}× as much in a day as a Steady one, so the same slot carries far more day-to-day movement. Watch the second bar, not just the first.`;
+      st.append(vol.swing_share > s.rules.swing_guide ? chip("warn", "▲", `Above ${pct(s.rules.swing_guide)} swing guide`) : chip("good", "✓", `Within ${pct(s.rules.swing_guide)} swing guide`));
+    } else {
+      ins.textContent = "No open positions yet. The mix fills in as trades open.";
+    }
+    const legend = $("legend"); legend.replaceChildren();
+    s.rules.buckets.forEach(b => { const x = el("span"); x.append(swatch(b.id), document.createTextNode(`${b.name} · target +${pct(b.target)}`)); legend.append(x); });
+
+    const stack = (id, key, shareKey, describe) => {
+      const box = $(id); box.replaceChildren();
+      if (!total) { box.append(el("div", "empty", "No positions")); return; }
+      B.forEach(b => {
+        if (!b[key]) return;
+        const seg = el("div", "seg " + b.id); seg.style.flex = `${b[key]} 1 0`; seg.tabIndex = 0; seg.setAttribute("role", "img");
+        const [v, x] = describe(b);
+        seg.setAttribute("aria-label", `${b.name}: ${v}, ${x}`);
+        seg.append(el("span", null, pct(b[shareKey])));
+        const on = e => showTip(e, v, b.name, x, b.id);
+        seg.addEventListener("pointermove", on); seg.addEventListener("focus", on);
+        seg.addEventListener("pointerleave", hideTip); seg.addEventListener("blur", hideTip);
+        box.append(seg);
+      });
+    };
+    stack("stack-money", "value_usd", "money_share", b => [pct(b.money_share, 1) + " of money", `${usd(b.value_usd)} in ${b.n} position${b.n === 1 ? "" : "s"}`]);
+    stack("stack-swing", "swing_usd", "swing_share", b => [pct(b.swing_share, 1) + " of daily swing", `about ${usd(b.swing_usd)} on a normal day`]);
+    requestAnimationFrame(fitLabels);
+
+    const box = $("buckets"); box.replaceChildren();
+    B.forEach(b => {
+      const card = el("article", "bucket"), head = el("div", "bucket-head"), left = el("div");
+      const nm = el("div", "bname"); nm.append(swatch(b.id), el("span", null, b.name));
+      const rule = s.rules.buckets.find(r => r.id === b.id);
+      const band = rule.max_atr == null ? `Moves over ${pct(s.rules.buckets[1].max_atr, 1).replace(".0", "")} a day` : b.id === "steady" ? `Moves under ${pct(rule.max_atr, 1).replace(".0", "")} a day` : `Moves ${pct(s.rules.buckets[0].max_atr, 1).replace(".0", "").replace("%", "")}–${pct(rule.max_atr, 1).replace(".0", "")} a day`;
+      left.append(nm, el("div", "brule", `${band} · target +${pct(b.target)}`));
+      const status = b.room <= 0 ? chip("crit", "✕", b.n >= b.cap ? "Full · new buys blocked" : "No free slots") : b.room === 1 ? chip("warn", "▲", "1 slot left") : chip("good", "✓", `${b.room} slots free`);
+      head.append(left, status);
+      const slots = el("div"); const pips = el("div", "pips"); pips.setAttribute("aria-hidden", "true");
+      for (let i = 0; i < b.cap; i++) pips.append(el("span", "pip " + b.id + (i < b.n ? " on" : "")));
+      slots.append(pips, el("div", "slots-text", `${b.n} of ${b.cap} slots used · cap ${usd(b.cap * s.rules.slot_usd)}`));
+      const stats = el("div", "bstats");
+      const stat = (l, v, cls) => { const d = el("div"); d.append(el("small", null, l), el("b", cls, v)); return d; };
+      stats.append(stat("Value", usd(b.value_usd)), stat("Profit / loss", sUsd(b.pl_usd), b.pl_usd >= 0 ? "up" : "down"), stat("Daily swing", "≈" + usd(b.swing_usd)));
+      card.append(head, slots, stats); box.append(card);
+    });
+    $("rules-line").textContent = `Book limit ${s.rules.max_slots} slots × ${usd(s.rules.slot_usd)}. Bucket caps block new buys once full; the swing guide warns but doesn't block.`;
+  }
+  function fitLabels() {
+    document.querySelectorAll(".seg span").forEach(sp => { sp.hidden = false; if (sp.scrollWidth + 8 > sp.parentElement.clientWidth) sp.hidden = true; });
+  }
+  addEventListener("resize", fitLabels);
+
+  // ---- positions ----
+  function track(p) {
+    const wrap = el("div"), box = el("div", "track");
+    const dir = p.last >= p.entry ? "up" : "down";
+    const clamp = v => Math.min(100, Math.max(0, v * 100));
+    const e = clamp(p.entry_progress), l = clamp(p.progress);
+    const rail = el("div", "rail"), entry = el("div", "entry"), fill = el("div", "fill " + dir), dot = el("div", "dot " + dir);
+    entry.style.left = e + "%"; fill.style.left = Math.min(e, l) + "%"; fill.style.width = Math.abs(l - e) + "%"; dot.style.left = l + "%";
+    box.append(rail, fill, entry, dot);
+    box.setAttribute("role", "img"); box.setAttribute("aria-label", `${Math.round(l)}% of the way from stop to target`);
+    box.title = `Stop ${px(p.stop, p.decimals)} · Entry ${px(p.entry, p.decimals)} · Last ${px(p.last, p.decimals)} · Target ${px(p.target, p.decimals)}`;
+    const ends = el("div", "track-ends"); ends.append(el("span", null, "stop"), el("span", null, `${Math.round(l)}%`), el("span", null, "target"));
+    wrap.append(box, ends); return wrap;
+  }
+  function renderFilters(s) {
+    const box = $("filters"); box.replaceChildren();
+    const count = id => s.positions.filter(p => id === "all" || p.bucket === id).length;
+    [["all", "All"], ["steady", "Steady"], ["core", "Core"], ["volatile", "Volatile"]].forEach(([id, name]) => {
+      const b = el("button", "fbtn"); b.type = "button";
+      if (id !== "all") b.append(swatch(id));
+      b.append(document.createTextNode(`${name} ${count(id)}`));
+      b.setAttribute("aria-pressed", String(filter === id));
+      b.addEventListener("click", () => { filter = id; try { localStorage.setItem("fp-filter", id); } catch (e) {} renderFilters(STATE); renderRows(STATE); });
+      box.append(b);
+    });
+  }
+  function renderRows(s) {
+    const tb = $("rows"); tb.replaceChildren();
+    const ps = s.positions.filter(p => filter === "all" || p.bucket === filter);
+    if (!ps.length) { const tr = el("tr"), td = el("td", "empty-row", s.positions.length ? "No positions of this type." : "No open positions. Buys from the dashboard or TWS appear here within seconds of filling."); td.colSpan = 11; tr.append(td); tb.append(tr); return; }
+    ps.forEach(p => {
+      const tr = el("tr");
+      const td = (child, cls) => { const c = el("td", cls); if (child instanceof Node) c.append(child); else c.textContent = child; return c; };
+      const tick = el("span", "tick"); tick.append(swatch(p.bucket), document.createTextNode(p.symbol));
+      const name = el("div"); name.append(tick, el("span", "small", `${BUCKET_NAMES[p.bucket]}${p.bucket_confirmed ? "" : " (suggested)"} · ${MARKET_SHORT[p.market] || p.market}`));
+      const pl = el("div"); pl.append(el("span", p.pl_usd >= 0 ? "up" : "down", sUsd(p.pl_usd)), el("span", "small", sPct(p.pl_pct)));
+      const stop = el("div"); stop.append(el("span", null, px(p.stop, p.decimals)));
+      if (p.stop_state === "breakeven") stop.append(el("span", "ok-small", "✓ at entry"));
+      else if (p.stop_state === "trailing") stop.append(el("span", "ok-small", `✓ trailing ${sPct(p.stop_from_entry)}`));
+      else stop.append(el("span", "small", sPct(p.stop_from_entry)));
+      const tgt = el("div"); tgt.append(el("span", null, px(p.target, p.decimals)), el("span", "small", p.half_sold ? "half sold" : `${p.target_qty} sh · +${pct(s.rules.buckets.find(b => b.id === p.bucket).target)}`));
+      const prot = p.protected ? chip("good", "✓", "Stop") : chip("crit", "✕", "No stop");
+      const strikes = p.strikes ? chip("warn", "▲", `${p.strikes} of ${s.rules.max_strikes}`) : el("span", "small", "—");
+      const last = el("div"); last.append(el("span", null, px(p.last, p.decimals)), el("span", "small", p.currency));
+      tr.append(td(name), td(String(p.qty)), td(px(p.entry, p.decimals)), td(last), td(pl), td(stop), td(tgt), td(track(p)), td(prot, "center"), td(strikes, "center"), td(String(p.days)));
+      tb.append(tr);
+    });
+  }
+
+  // ---- strikes + feed ----
+  function renderStrikes(s) {
+    const box = $("strikes"); box.replaceChildren();
+    if (!s.strikes.length) { box.append(el("li", "what", "No recent stop-outs. Every stock has two tries.")); return; }
+    s.strikes.forEach(x => {
+      const li = el("li"); const who = el("div", "who"); who.append(swatch(x.bucket), document.createTextNode(x.key));
+      const c = x.locked ? chip("crit", "✕", `Locked · unlocks ${fmtDate(x.unlocks_on)}`) : chip("warn", "▲", x.held ? "Last try · held" : `${x.tries_left} try left`);
+      const detail = x.locked ? `Stopped out ${s.rules.max_strikes} times in a row, last on ${fmtDate(x.last_exit)}.` : `Stopped out on ${fmtDate(x.last_exit)} (${sPct(x.last_result)}). The next stop-out locks it for ${s.rules.lockout_days} trading days.`;
+      li.append(who, c, el("div", "what", detail)); box.append(li);
+    });
+  }
+  function renderFeed(s) {
+    const box = $("feed"); box.replaceChildren();
+    if (!s.events.length) { box.append(el("li", "what", "Nothing yet.")); return; }
+    const icon = { crit: "✕", warn: "!", info: "·" };
+    s.events.forEach(e => {
+      const li = el("li"); const m = el("span", "mark " + (e.level === "info" ? "info" : e.level), icon[e.level] || "·"); m.setAttribute("aria-hidden", "true");
+      const t = el("time", null, new Date(e.at).toLocaleString([], { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" })); t.dateTime = e.at;
+      li.append(m, t, el("span", null, e.message)); box.append(li);
+    });
+  }
+
+  // ---- watchlist ----
+  function renderWatch(s) {
+    const tb = $("wl-rows"); tb.replaceChildren();
+    const dl = $("gate-list"); dl.replaceChildren();
+    if (!s.watchlist.length) { const tr = el("tr"), td = el("td", "empty-row", "The watchlist is empty. Add a ticker above."); td.colSpan = 7; tr.append(td); tb.append(tr); }
+    s.watchlist.forEach(w => {
+      const o = el("option"); o.value = w.key; dl.append(o);
+      const tr = el("tr");
+      const td = (child, cls) => { const c = el("td", cls); if (child instanceof Node) c.append(child); else c.textContent = child; return c; };
+      const bucket = w.confirmed || w.suggested;
+      const tick = el("span", "tick"); if (bucket) tick.append(swatch(bucket)); tick.append(document.createTextNode(w.symbol));
+      const name = el("div"); name.append(tick, el("span", "small", `${MARKET_SHORT[w.market] || w.market}${w.lot_size > 1 ? ` · lot ${w.lot_size}` : ""}${w.name ? " · " + w.name : ""}`));
+      const last = el("div"); last.append(el("span", null, px(w.last, w.decimals)), el("span", "small", w.currency));
+      const typ = el("div", "typ");
+      const sel = el("select"); sel.setAttribute("aria-label", `Stock type for ${w.key}`); sel.disabled = !LIVE;
+      ["steady", "core", "volatile"].forEach(b => { const op = el("option", null, BUCKET_NAMES[b]); op.value = b; if (b === bucket) op.selected = true; sel.append(op); });
+      sel.addEventListener("change", () => setBucket(w.key, sel.value));
+      typ.append(sel);
+      if (!w.confirmed && w.suggested) {
+        const cb = el("button", "btn small ghost", "Confirm"); cb.type = "button"; cb.disabled = !LIVE;
+        cb.addEventListener("click", () => setBucket(w.key, sel.value)); typ.append(cb);
+        typ.append(el("span", "small", "suggested"));
+      } else if (w.confirmed) typ.append(el("span", "ok-small", "✓ confirmed"));
+      let status;
+      if (w.error) status = chip("crit", "✕", "Not found");
+      else if (w.locked) status = chip("crit", "✕", `Locked · ${fmtDate(w.unlocks_on)}`);
+      else if (w.held) status = chip("info", "●", "Held");
+      else if (w.tries_left < s.rules.max_strikes) status = chip("warn", "▲", "Last try");
+      else status = chip("good", "✓", "Ready");
+      const btns = el("span", "rowbtns");
+      const chk = el("button", "btn small ghost", "Check"); chk.type = "button";
+      chk.addEventListener("click", () => { $("gate-sym").value = w.key; $("gate-bucket").value = ""; $("gate-limit").value = ""; runCheck(); $("gate-h").scrollIntoView({ behavior: "smooth", block: "start" }); });
+      const rm = el("button", "btn small ghost", "Remove"); rm.type = "button"; rm.disabled = !LIVE;
+      rm.addEventListener("click", async () => { try { const r = await api("/api/unwatch", { key: w.key }); wlMsg(r.message, true); refresh(); } catch (e) { wlMsg(e.message, false); } });
+      btns.append(chk, rm);
+      tr.append(td(name), td(last), td(w.atr != null ? pct(w.atr, 1) : "—"), td(typ), td(status), td(w.source), td(btns));
+      tb.append(tr);
+    });
+  }
+  function wlMsg(text, ok) { const m = $("wl-msg"); m.textContent = text; m.className = "msg " + (ok ? "ok" : "err"); m.hidden = false; }
+  async function setBucket(key, bucket) {
+    try { const r = await api("/api/bucket", { key, bucket }); wlMsg(r.message, true); refresh(); } catch (e) { wlMsg(e.message, false); }
+  }
+  $("wl-form").addEventListener("submit", async e => {
+    e.preventDefault();
+    if (!LIVE) { wlMsg("This is a snapshot. Run `fireplanner trade run` to edit the watchlist.", false); return; }
+    const symbol = $("wl-sym").value.trim(); if (!symbol) return;
+    const lot = parseInt($("wl-lot").value, 10);
+    try { const r = await api("/api/watch", { symbol, lot_size: Number.isFinite(lot) ? lot : null }); wlMsg(r.message, true); $("wl-sym").value = ""; $("wl-lot").value = ""; refresh(); }
+    catch (err) { wlMsg(err.message, false); }
+  });
+
+  // ---- gate ----
+  let lastCheck = null;
+  function renderGate(res, message, ok) {
+    const out = $("gate-out"); out.replaceChildren();
+    if (message && !res) { out.append(el("p", "msg " + (ok ? "ok" : "err"), message)); return; }
+    if (!res) return;
+    const p = res.plan, inst = res.instrument, d = inst.decimals;
+    const v = el("div", "verdict");
+    v.append(res.verdict === "blocked" ? chip("crit", "✕", "Blocked") : res.verdict === "warning" ? chip("warn", "▲", "Allowed, with a warning") : chip("good", "✓", "Allowed"));
+    v.append(el("span", "small", `${inst.symbol} · ${inst.market_name}${inst.name ? " · " + inst.name : ""}`));
+    out.append(v);
+    const order = el("div", "order");
+    const item = (label, val, sub) => { const x = el("div"); x.append(el("small", null, label), el("b", null, val)); if (sub) x.append(el("span", "small", sub)); return x; };
+    const cost = inst.currency === "USD" ? usd(p.cost_usd) : `${inst.currency} ${p.cost_local.toLocaleString("en-US", { maximumFractionDigits: 0 })} ≈ ${usd(p.cost_usd)}`;
+    order.append(
+      item("Buy", `${p.qty} ${inst.symbol}`, `limit ${px(p.limit, d)} · ${cost}${inst.lot_size > 1 ? ` · ${p.qty / inst.lot_size} lot(s) of ${inst.lot_size}` : ""}`),
+      item("Stock type", BUCKET_NAMES[p.bucket], p.atr != null ? `${pct(p.atr, 1)} average daily range` : "no range history"),
+      item("GTC stop", px(p.stop, d), `${sPct(-p.stop_pct)} (${p.stop_basis}) · max loss ≈ ${usd(p.max_loss_usd)}`),
+      item("Target", px(p.target, d), `${sPct(p.target_pct)} on ${p.target_qty} shares ≈ ${usd(p.target_gain_usd * p.target_qty / Math.max(1, p.qty))}`),
+    );
+    out.append(order);
+    const ul = el("ul", "checks"); const icon = { good: "✓", warn: "!", crit: "✕", info: "i" };
+    res.checks.forEach(c => { const li = el("li"); const m = el("span", "mark " + c.level, icon[c.level]); m.setAttribute("aria-hidden", "true"); const t = el("div"); t.append(el("span", "t", c.title), el("span", "d", c.detail)); li.append(m, t); ul.append(li); });
+    out.append(ul);
+    const acts = el("div", "actions");
+    const buy = el("button", "btn", `Send buy order`); buy.type = "button";
+    const canSend = LIVE && res.verdict !== "blocked" && p.qty > 0;
+    buy.disabled = !canSend;
+    acts.append(buy);
+    if (!LIVE) acts.append(el("span", "small", "Snapshot only. Orders are sent from the running service."));
+    else if (!res.orders_enabled) acts.append(el("span", "small", "Orders are off (dry run): this logs the order instead of sending it."));
+    buy.addEventListener("click", () => {
+      acts.replaceChildren();
+      const q = el("span", null, `Send BUY ${p.qty} ${inst.symbol} limit ${px(p.limit, d)} (${cost})?`);
+      const yes = el("button", "btn danger", "Confirm buy"); yes.type = "button";
+      const no = el("button", "btn ghost", "Cancel"); no.type = "button";
+      no.addEventListener("click", () => renderGate(res));
+      yes.addEventListener("click", async () => {
+        yes.disabled = true; no.disabled = true;
+        try {
+          const r = await api("/api/enter", { symbol: inst.key, bucket: $("gate-bucket").value || p.bucket, limit: p.limit, expect_qty: p.qty });
+          renderGate(r.check || res); $("gate-out").append(el("p", "msg " + (r.ok ? "ok" : "err"), r.message)); refresh();
+        } catch (e) { renderGate(res); $("gate-out").append(el("p", "msg err", e.message)); }
+      });
+      acts.append(q, yes, no);
+    });
+    out.append(acts);
+    if (message) out.append(el("p", "msg " + (ok ? "ok" : "err"), message));
+  }
+  async function runCheck() {
+    const symbol = $("gate-sym").value.trim(); if (!symbol) return;
+    const bucket = $("gate-bucket").value || null;
+    const limRaw = $("gate-limit").value.trim(); const limit = limRaw ? parseFloat(limRaw.replace(/,/g, "")) : null;
+    if (!LIVE) {
+      const demo = (STATE.demo_checks || {})[symbol.toUpperCase()];
+      if (demo) { lastCheck = demo; renderGate(demo); } else renderGate(null, "Snapshot only: try one of the watchlist stocks, or run the service for live checks.", false);
+      return;
+    }
+    $("gate-go").disabled = true; renderGate(null, "Checking with IBKR…", true);
+    try { lastCheck = await api("/api/check", { symbol, bucket, limit }); renderGate(lastCheck); }
+    catch (e) { renderGate(null, e.message, false); }
+    finally { $("gate-go").disabled = false; }
+  }
+  $("gate-form").addEventListener("submit", e => { e.preventDefault(); runCheck(); });
+
+  // ---- notes ----
+  function renderNotes(s) {
+    const r = s.rules, b = r.buckets, box = $("notes"); box.replaceChildren();
+    [
+      `Stock type comes from the average daily range over the last 14 days (ATR as a % of price): Steady under ${pct(b[0].max_atr, 1).replace(".0", "")}, Core ${pct(b[0].max_atr, 1).replace(".0", "")}–${pct(b[1].max_atr, 1).replace(".0", "")}, Volatile above. The system suggests a type and you confirm it.`,
+      `Every trade is ${usd(r.slot_usd)} in whole shares or board lots, converted at the day's exchange rate. The GTC stop is the tighter of ${pct(r.max_stop_pct)} or ${r.atr_stop_mult} × the daily range below entry.`,
+      `At the target, half the position is sold. The stop moves to the entry price once the stock has been ${pct(r.breakeven_at)} above entry, then trails ${r.atr_trail_mult} × the daily range under the highest price since entry. It never moves down.`,
+      `Two strikes per stock: after a stop-out you may re-enter once; a second stop-out in a row locks it for ${r.lockout_days} trading days.`,
+      `Daily swing is position value × average daily range: roughly what a normal day can move each position.`,
+    ].forEach(t => box.append(el("li", null, t)));
+  }
+
+  function render(s) {
+    if (!s || !s.rules) return;
+    STATE = s;
+    renderHeader(s); renderKpis(s); renderMix(s); renderFilters(s); renderRows(s); renderStrikes(s); renderFeed(s); renderWatch(s); renderNotes(s);
+  }
+  async function refresh() { try { render(await api("/api/state")); } catch (e) { const b = $("banner"); b.textContent = "Can't reach the trading service: " + e.message; b.hidden = false; } }
+
+  render(STATE);
+  if (LIVE) { refresh(); setInterval(refresh, 5000); }
+})();
+</script>
+</body>
+</html>

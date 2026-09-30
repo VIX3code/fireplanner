@@ -297,6 +297,163 @@ def cmd_dashboard(args) -> int:
     return 0
 
 
+# --------------------------------------------------------------------------
+# trade management
+# --------------------------------------------------------------------------
+
+def _trade_service(args):
+    from .notify import TelegramNotifier
+    from .trading import Journal, TradingService, load_rules, load_settings
+    from .trading.ib_broker import IBBroker
+
+    rules = load_rules(args.config)
+    settings = load_settings(args.config)
+    journal = Journal(args.journal or settings["journal"])
+    broker = IBBroker(host=args.host, port=args.port,
+                      client_id=args.trade_client_id or settings["guardian"]["client_id"],
+                      allow_live=bool(settings["allow_live"]), rules=rules, lot_sizes=settings["lot_sizes"])
+    notifier = None
+    if not args.no_notify:
+        n = TelegramNotifier(env_file=args.env_file or None, source="Swing Desk")
+        notifier = n if n.configured else None
+    service = TradingService(broker, journal, rules,
+                             orders_enabled=bool(settings["enabled"]) and not args.dry_run,
+                             notifier=notifier, seed_watchlist=settings["watchlist"],
+                             lot_sizes=settings["lot_sizes"])
+    return service, settings
+
+
+def _print_book(state: dict) -> None:
+    t = state["totals"]
+    mode = f"{state['mode']} · {'orders ON' if state['orders_enabled'] else 'dry run'}"
+    print(f"\n  Swing Desk  ({mode})  {state['generated_at']}")
+    print(f"  {t['slots_used']}/{t['max_slots']} slots · invested ${t['invested_usd']:,.0f} · "
+          f"P/L ${t['pl_usd']:+,.0f} · lost if every stop hits ${t['risk_usd']:,.0f} · "
+          f"{t['protected']}/{t['open']} protected\n")
+    for b in state["buckets"]:
+        print(f"    {b['name']:<9} {b['n']:>2}/{b['cap']:<2}  money {b['money_share'] * 100:5.1f}%   "
+              f"daily swing {b['swing_share'] * 100:5.1f}%")
+    if state["positions"]:
+        print()
+        print(f"    {'stock':<12}{'type':<9}{'qty':>6}{'entry':>11}{'last':>11}{'stop':>11}{'target':>11}  state")
+        for p in state["positions"]:
+            d = p["decimals"]
+            print(f"    {p['key']:<12}{p['bucket']:<9}{p['qty']:>6}{p['entry']:>11,.{d}f}{p['last']:>11,.{d}f}"
+                  f"{p['stop']:>11,.{d}f}{p['target']:>11,.{d}f}  {p['stop_state']}"
+                  f"{'' if p['protected'] else '  NO STOP'}")
+    print()
+
+
+def cmd_trade_run(args) -> int:
+    import os
+
+    from .trading.server import serve
+
+    service, settings = _trade_service(args)
+    dash = settings["dashboard"]
+    token = os.environ.get("FIREPLANNER_DASH_TOKEN", "")
+    host = args.dash_host or dash["host"]
+    port = args.dash_port or int(dash["port"])
+    httpd = serve(service, host=host, port=port, token=token)
+    b = service.broker
+    print(f"\n  Swing Desk: {b.mode.upper()} account on {args.host}:{args.port}, "
+          f"{'orders ON' if service.orders_enabled else 'DRY RUN (trading.enabled is false)'}")
+    print(f"  dashboard  http://{host}:{port}/{'?token=…' if token else ''}")
+    print("  Ctrl-C to stop. Stops and targets already placed stay live at IBKR.\n")
+    try:
+        service.run(interval=float(settings["guardian"]["interval_seconds"]))
+    except KeyboardInterrupt:
+        pass
+    finally:
+        httpd.shutdown()
+        b.disconnect()
+    return 0
+
+
+def cmd_trade_once(args) -> int:
+    service, _ = _trade_service(args)
+    try:
+        state = service.cycle()
+    finally:
+        service.broker.disconnect()
+    _print_book(state)
+    for e in reversed(state["events"][:12]):
+        print(f"    [{e['level']}] {e['message']}")
+    print()
+    return 0
+
+
+def cmd_trade_check(args) -> int:
+    service, _ = _trade_service(args)
+    try:
+        service.cycle()
+        res = service.check(args.symbol, bucket=args.bucket, limit=args.limit)
+    finally:
+        service.broker.disconnect()
+    p, inst = res["plan"], res["instrument"]
+    d = inst["decimals"]
+    print(f"\n  {inst['key']}  {inst['name']}  ->  {res['verdict'].upper()}")
+    print(f"  buy {p['qty']} @ {p['limit']:,.{d}f} {inst['currency']} (~${p['cost_usd']:,.0f}) · "
+          f"stop {p['stop']:,.{d}f} (-{p['stop_pct'] * 100:.1f}%, {p['stop_basis']}) · "
+          f"target {p['target']:,.{d}f} (+{p['target_pct'] * 100:.0f}%) on {p['target_qty']}")
+    for c in res["checks"]:
+        mark = {"good": "ok ", "warn": "!! ", "crit": "XX ", "info": " i "}[c["level"]]
+        print(f"    {mark} {c['title']}: {c['detail']}")
+    print()
+    return 0 if res["verdict"] != "blocked" else 2
+
+
+def cmd_trade_demo(args) -> int:
+    from .trading.demo import build_demo
+    from .trading.server import render_dashboard
+
+    _, state = build_demo()
+    html = render_dashboard(state, live=False)
+    with open(args.output, "w") as f:
+        f.write(html)
+    print(f"wrote {args.output}  ({len(html):,} bytes, simulated data)")
+    if args.print:
+        _print_book(state)
+    return 0
+
+
+def cmd_trade_watch(args) -> int:
+    from .trading import Journal, import_watchlist, load_settings, parse_symbol
+
+    journal = Journal(args.journal or load_settings(args.config)["journal"])
+    if args.action == "add":
+        for text in args.items:
+            sym, mkt = parse_symbol(text)
+            journal.watch(f"{sym}:{mkt}", sym, mkt, source="manual", lot_size=args.lot)
+            print(f"  added {sym}:{mkt}")
+    elif args.action == "rm":
+        for key in args.items:
+            sym, mkt = parse_symbol(key)
+            print(f"  {'removed' if journal.unwatch(f'{sym}:{mkt}') else 'not found:'} {sym}:{mkt}")
+    elif args.action == "import":
+        for path in args.items:
+            with open(path, encoding="utf-8", errors="replace") as f:
+                added = import_watchlist(journal, f.read())
+            print(f"  imported {len(added)} from {path}: {', '.join(added)}")
+    for w in journal.watchlist():
+        lot = f"  lot {w['lot_size']}" if w["lot_size"] else ""
+        print(f"    {w['key']:<14} {w['source']:<8}{lot}")
+    return 0
+
+
+def cmd_trade_bucket(args) -> int:
+    from .trading import Journal, load_rules, load_settings, parse_symbol
+
+    rules = load_rules(args.config)
+    b = rules.bucket(args.bucket)
+    sym, mkt = parse_symbol(args.symbol)
+    journal = Journal(args.journal or load_settings(args.config)["journal"])
+    journal.confirm_bucket(f"{sym}:{mkt}", b.id)
+    print(f"  {sym}:{mkt} confirmed as {b.name} (target +{b.target:.0%}, cap {b.cap}). "
+          f"A running guardian updates an open position's target on its next cycle.")
+    return 0
+
+
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(prog="fireplanner", description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -376,6 +533,48 @@ def main(argv=None) -> int:
     s.add_argument("-o", "--output", default="dashboard.html")
     s.add_argument("--equity", type=float, default=0.0)
     s.set_defaults(func=cmd_dashboard)
+
+    t = sub.add_parser("trade", help="manage positions: stops, targets, buckets, the live dashboard")
+    tsub = t.add_subparsers(dest="trade_cmd", required=True)
+
+    def trade_parser(name, help_text, func):
+        p = tsub.add_parser(name, help=help_text)
+        p.add_argument("--config", default="config/config.yaml")
+        p.add_argument("--journal", default="", help="journal file (default: trading.journal in the config)")
+        p.set_defaults(func=func)
+        return p
+
+    def broker_opts(p):
+        p.add_argument("--dry-run", action="store_true", help="log orders instead of sending them, whatever the config says")
+        p.add_argument("--trade-client-id", type=int, default=0, help="IBKR client id for the guardian (default: config)")
+        p.add_argument("--env-file", default="", help="read TELEGRAM_* from this env file")
+        p.add_argument("--no-notify", action="store_true", help="no Telegram messages")
+
+    p = trade_parser("run", "run the guardian and the live dashboard", cmd_trade_run)
+    broker_opts(p)
+    p.add_argument("--dash-host", default="")
+    p.add_argument("--dash-port", type=int, default=0)
+
+    broker_opts(trade_parser("once", "one guardian cycle, then print the book", cmd_trade_once))
+
+    p = trade_parser("check", "run the pre-trade check for one stock", cmd_trade_check)
+    broker_opts(p)
+    p.add_argument("symbol", help="NVDA, 700:HK, D05:SG, 7203:JP, HSBA:LN ...")
+    p.add_argument("--bucket", choices=["steady", "core", "volatile"])
+    p.add_argument("--limit", type=float)
+
+    p = trade_parser("demo", "write the dashboard for a simulated book (no IBKR needed)", cmd_trade_demo)
+    p.add_argument("-o", "--output", default="swing_desk.html")
+    p.add_argument("--print", action="store_true", help="also print the book")
+
+    p = trade_parser("watch", "edit the watchlist", cmd_trade_watch)
+    p.add_argument("action", choices=["add", "rm", "import", "list"])
+    p.add_argument("items", nargs="*", help="tickers (add/rm) or files (import)")
+    p.add_argument("--lot", type=int, default=None, help="board lot, for Hong Kong listings")
+
+    p = trade_parser("bucket", "confirm a stock's type", cmd_trade_bucket)
+    p.add_argument("symbol")
+    p.add_argument("bucket", choices=["steady", "core", "volatile"])
 
     args = ap.parse_args(argv)
     return args.func(args)

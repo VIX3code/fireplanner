@@ -27,3 +27,7 @@ deploy/macos/*.log
 deploy/macos/install.log
 deploy/macos/fireplanner.launchd.*
 site/
+
+# Trade journal: your positions, exits and alerts. Never commit.
+data/trading/
+swing_desk.html
