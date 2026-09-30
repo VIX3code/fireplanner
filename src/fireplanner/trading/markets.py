@@ -106,6 +106,8 @@ class Instrument:
     description: str = ""
     inverse: bool = False
     leverage: int | None = None
+    #: Industry group from IBKR (e.g. "Semiconductors"); "" when unknown.
+    sector: str = ""
 
     @property
     def key(self) -> str:

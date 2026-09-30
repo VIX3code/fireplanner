@@ -339,15 +339,18 @@ the regime cap · backtest evidence with the caveats above printed next to the n
 `fireplanner trade` manages positions once you act on a signal, across US, London, Hong Kong,
 Singapore and Tokyo listings:
 
-- **$5,000 per trade, 20 at most**, in whole shares or board lots, converted at the day's rate.
+- **A fixed loss per trade.** Every position is sized so its stop costs the same $250, in whole
+  shares or board lots, at most $10,000 per position and 20 positions.
 - **A GTC stop on every position the moment it fills**, whether bought on the dashboard, in TWS
   or in the IBKR app: the tighter of 5% or 2.5 × the daily range. Half comes off at the target;
   the stop moves to entry at +5%, then trails. It never moves down.
-- **Three stock types.** Steady (+10%), Core (+15%) and Volatile (+20%, at most 5 open), with the
-  bucket mix shown by money **and** by daily swing. The swing view is the one that shows
-  concentration.
-- **Two strikes per stock:** a second stop-out in a row locks it for 10 trading days.
-- **A pre-trade check** behind every dashboard buy, and a live dashboard to run it from.
+- **Three stock types.** Steady (+10%), Core (+15%) and Volatile (+20%, at most 7 open), with the
+  mix shown by money **and** by daily swing, plus a cap of four per sector.
+- **Two strikes per stock** (a second stop-out in a row locks it until you unlock it), one add to
+  a winner, and a time stop.
+- **Market weather per market** scales new buys, and **circuit breakers** (daily and weekly loss
+  limits, three losses in a row, a kill switch) pause them.
+- **Earnings dates** beside every stock, and a **journal** graded in R by type and setup.
 
 ```bash
 fireplanner trade demo -o swing_desk.html      # try it on a simulated book, no IBKR needed
@@ -427,17 +430,19 @@ src/fireplanner/
                  gate.py    the pre-trade check
                  guardian.py no position without a stop; stops only move up
                  sync.py    keeps the journal in step with the broker
-                 journal.py SQLite: trades, exits, alerts, watchlist
+                 journal.py SQLite: trades, exits, alerts, watchlist, settings
+                 weather.py per-market regime for new buys; breakers.py loss limits
+                 earnings.py earnings dates; stats.py the journal graded in R
                  service.py the loop; server.py the live dashboard
                  sim.py     in-memory broker; ib_broker.py TWS / IB Gateway
-tests/           189 tests
+tests/           208 tests
 data/snapshots/  real IBKR pulls: SPY, VIX, RSP, NVDA, ZS, MP, FTNT + account state
 ```
 
 ## Correctness
 
 ```bash
-PYTHONPATH=src python3 -m pytest tests/ -q      # 189 passed
+PYTHONPATH=src python3 -m pytest tests/ -q      # 208 passed
 ```
 
 The tests that matter most:

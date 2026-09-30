@@ -13,6 +13,7 @@ guardian against a scripted price path before it ever touches a paper account.
 from __future__ import annotations
 
 import itertools
+import time
 from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 
@@ -41,6 +42,7 @@ class SimBroker:
         self.clock = clock or datetime(2026, 9, 30, 14, 0, tzinfo=timezone.utc)
         self.dirty = False
         self.rejected: list[str] = []
+        self._bars: dict = {}
 
     # -- setup -----------------------------------------------------------
     def add(self, inst: Instrument, price: float, atr: float | None = None) -> Instrument:
@@ -97,6 +99,16 @@ class SimBroker:
     def daily_atr(self, inst: Instrument) -> float | None:
         return self._atr.get(inst.con_id)
 
+    def set_bars(self, symbol_text: str, frame) -> None:
+        """Daily bars served by `bars`, keyed by ``"SPY"``, ``"2800:HK"`` and so on."""
+        self._bars[symbol_text.upper()] = frame
+
+    def bars(self, symbol_text: str, days: int = 520):
+        frame = self._bars.get(symbol_text.upper())
+        if frame is None:
+            raise LookupError(f"no bars for {symbol_text}")
+        return frame.tail(days)
+
     def usd_per_unit(self, currency: str) -> tuple[float, bool]:
         return self._fx[currency], True
 
@@ -108,6 +120,7 @@ class SimBroker:
             raise LookupError(f"unknown con_id {spec.con_id}")
         if spec.qty <= 0:
             raise ValueError("quantity must be positive")
+        self.tick()                               # time passes between orders, as it does live
         lot = max(1, self._inst[spec.con_id].lot_size)
         if spec.qty % lot:
             raise ValueError(f"{spec.qty} is not a multiple of the {lot}-share lot")
@@ -145,7 +158,9 @@ class SimBroker:
             self._orders[order.order_id] = replace(cur, status="Cancelled")
 
     def wait(self, seconds: float) -> None:
-        self.tick(max(1, int(seconds // 60)))
+        # Real (short) sleep so a running loop doesn't spin; simulated time only
+        # moves with prices and orders.
+        time.sleep(min(seconds, 0.05))
 
     def pop_dirty(self) -> bool:
         d, self.dirty = self.dirty, False

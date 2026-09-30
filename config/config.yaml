@@ -137,35 +137,74 @@ trading:
     host: 127.0.0.1           # put it behind deploy/Caddyfile to reach it from a phone
     port: 8765
 
-  # Sizing: one slot per trade, converted to the stock's currency, whole lots only.
-  slot_usd: 5000
-  max_slots: 20
+  # Sizing: the LOSS is fixed, the size follows. Each position is sized so a
+  # stop-out costs risk_per_trade_usd (before gaps): a calm stock with a 3%
+  # stop gets a bigger position than a volatile one with a 5% stop.
+  risk_per_trade_usd: 250
+  max_position_usd: 10000     # cap on any one position (or add), however tight its stop
+  max_invested_usd: 100000    # cap on the whole book at cost
+  max_slots: 20               # most positions open at once
+  round_up: true              # round shares / lots up...
+  max_round_up_overshoot: 0.20  # ...unless that adds >20% to the loss; then round down
   base_currency: USD
 
   # Stop: the tighter of max_stop_pct and atr_stop_mult x the average daily range.
   max_stop_pct: 0.05
   atr_stop_mult: 2.5
   outside_rth: false          # stops trigger in regular trading hours only
-  # Ratchet: to the entry price at +5%, then trail 3 ATRs under the high.
+  # Ratchet: to the entry price at +5%, then trail 3 ATRs under the high. Never down.
   breakeven_at: 0.05
   atr_trail_mult: 3.0
   take_half_at_target: true   # sell half at the target, trail the rest
 
   # Two strikes: after a stop-out you may re-enter once; two in a row lock the stock.
   max_strikes: 2
-  lockout_days: 10            # trading days
+  lockout_days: null          # null = locked until you unlock it; or a number of trading days
   strike_loss_pct: 0.005      # exits within 0.5% of entry are scratches, not strikes
 
-  one_position_per_stock: true
-  entry_limit_buffer: 0.005   # a dashboard buy is a limit 0.5% above the last price
+  # One add to a winner (stop already at entry or better), sized for the same fixed loss.
+  allow_add: true
+  max_adds: 1
+
+  # Time stop: flag a position that hasn't reached +5% within 4 weeks.
+  # The weeks can also be changed on the dashboard.
+  time_stop_weeks: 4
+  time_stop_min_gain: 0.05
+  time_stop_action: alert     # alert = flag it and you decide; sell = sell it automatically
+
+  # Earnings: warn (or block) new buys this close to a report.
+  earnings_warn_days: 7
+  earnings_block: false
+
+  # Market weather: multiplier on the fixed loss for new buys, per market. 0 blocks.
+  weather_sizing: {Risk-On: 1.0, Constructive: 1.0, Neutral: 1.0, Defensive: 0.5, Risk-Off: 0.0}
+  weather:                    # index proxy per market
+    US: SPY
+    LSE: ISF:LN
+    SEHK: 2800:HK
+    SGX: ES3:SG
+    TSEJ: 1306:JP
+
+  # Concentration.
+  max_per_sector: 4           # positions in one IBKR industry group (or a theme you set)
+  max_open_risk_usd: 5000     # most the book may lose if every stop hits at once
   swing_guide: 0.50           # warn when Volatile drives >50% of the daily swing
+  one_position_per_stock: true
+
+  # Circuit breakers: pause NEW buys. Open positions keep their stops.
+  daily_loss_limit_usd: 750
+  weekly_loss_limit_usd: 1500
+  max_consecutive_losses: 3   # stop-outs in a row, any stocks: pause until you resume
+  max_entries_per_day: 10
+
+  entry_limit_buffer: 0.005   # a dashboard buy is a limit 0.5% above the last price
 
   # Stock types. max_atr = average daily range (fraction of price) below which a
   # stock is suggested for that type. cap = most open positions of that type.
   buckets:
-    steady:   {name: Steady,   max_atr: 0.020, target: 0.10, cap: 20}
+    steady:   {name: Steady,   max_atr: 0.020, target: 0.10, cap: 10}
     core:     {name: Core,     max_atr: 0.035, target: 0.15, cap: 10}
-    volatile: {name: Volatile, max_atr: null,  target: 0.20, cap: 5}
+    volatile: {name: Volatile, max_atr: null,  target: 0.20, cap: 7}
 
   # Starting watchlist; add more on the dashboard or with `fireplanner trade watch`.
   # A bare ticker is US. Others: 700:HK, D05:SG, 7203:JP, HSBA:LN.

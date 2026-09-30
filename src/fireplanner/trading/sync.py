@@ -21,13 +21,13 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import date, datetime
 
-from .broker import BrokerFill, BrokerPosition
+from .broker import BrokerFill, BrokerPosition, parse_ref
 from .buckets import Holding
 from .journal import Journal, Trade, now_utc
 from .markets import Instrument
 from .rules import TradingRules
 from .sizing import initial_stop, target_price, target_qty
-from .strikes import strike_status
+from .strikes import strike_for
 
 __all__ = ["SyncEvent", "sync_trades"]
 
@@ -48,7 +48,16 @@ def _avg_fill(fills: list[BrokerFill], con_id: int, side: str, after: datetime |
     return sum(f.qty * f.price for f in fs) / qty, qty
 
 
-def _exit_kind(trade: Trade, price: float, inst: Instrument) -> str:
+_ROLE_KIND = {"exit": "exit", "timestop": "time-stop", "target": "target"}
+
+
+def _exit_kind(trade: Trade, price: float, inst: Instrument, roles: set | None = None) -> str:
+    """Name an exit by the order that filled it, or by its price when fills are gone."""
+    for role in ("timestop", "exit", "target"):
+        if roles and role in roles:
+            return _ROLE_KIND[role]
+    if roles and "stop" in roles:
+        return {"breakeven": "breakeven", "trailing": "trail"}.get(trade.stop_state, "stop")
     tick = inst.tick(price)
     if price >= trade.target - tick:
         return "target"
@@ -78,6 +87,7 @@ def sync_trades(
     events: list[SyncEvent] = []
     by_con = {p.con_id: p for p in positions if p.qty > 0}
     confirmed = journal.confirmed_buckets()
+    sectors = journal.sectors()
 
     for p in positions:
         if p.qty < 0:
@@ -97,7 +107,9 @@ def sync_trades(
         after = datetime.fromisoformat(last_exit[-1].at) if last_exit else t.opened
         got = _avg_fill(fills, t.con_id, "SELL", after)
         price = got[0] if got else quotes.get(t.con_id, t.stop)
-        kind = _exit_kind(t, price, inst)
+        roles = {parse_ref(f.order_ref)[0] for f in fills
+                 if f.con_id == t.con_id and f.side == "SELL" and (after is None or f.time > after)}
+        kind = _exit_kind(t, price, inst, roles)
         t = journal.add_exit(t.id, sold, price, kind, at=now)
         usd = fx.get(t.currency, 1.0)
         pl = inst.value(sold, price - t.entry) * usd
@@ -108,12 +120,14 @@ def sync_trades(
             continue
         t = journal.close_trade(t.id, magnifier=inst.price_magnifier, usd_per_unit=usd,
                                 strike_loss_pct=rules.strike_loss_pct, at=now)
-        st = strike_status(t.key, journal.closed_trades(t.key), today, rules)
+        st = strike_for(journal, t.key, today, rules)
         result = f"{t.realized_pct:+.1%}, {_money(t.realized_usd)}"
         if t.strike:
-            tail = (f"Strike {st.strikes if not st.locked else rules.max_strikes} of {rules.max_strikes}: locked until "
-                    f"{st.locked_until:%d %b}." if st.locked else
-                    f"Strike {st.strikes} of {rules.max_strikes}: {st.tries_left} try left.")
+            if st.locked:
+                until = f"until {st.locked_until:%d %b}" if st.locked_until else "until you unlock it"
+                tail = f"Strike {rules.max_strikes} of {rules.max_strikes}: locked {until}."
+            else:
+                tail = f"Strike {st.strikes} of {rules.max_strikes}: {st.tries_left} try left."
             events.append(SyncEvent("warn", "stopped-out", t.key, f"{t.symbol} closed ({kind}) at {inst.fmt(price)}, {result}. {tail}"))
         else:
             events.append(SyncEvent("info", "closed", t.key, f"{t.symbol} closed ({kind}) at {inst.fmt(price)}, {result}."))
@@ -135,11 +149,14 @@ def sync_trades(
             qty = int(p.qty)
             stop = initial_stop(entry, a, rules, inst)
             target = target_price(entry, rules.bucket(bucket).target, inst)
+            usd = fx.get(inst.currency, 1.0)
+            pending = journal.pop_pending(inst.key) or {}
+            sector = sectors.get(inst.key) or inst.sector or ""
             t = journal.open_trade(key=inst.key, symbol=inst.symbol, market=inst.market, con_id=con_id,
                                    currency=inst.currency, bucket=bucket, entry=entry, qty=qty, atr=a,
                                    stop=stop, target=target, target_qty=target_qty(qty, inst.lot_size, rules),
-                                   opened_at=now)
-            usd = fx.get(inst.currency, 1.0)
+                                   opened_at=now, setup=pending.get("setup", ""), note=pending.get("note", ""),
+                                   initial_risk_usd=inst.value(qty, entry - stop) * usd, sector=sector)
             events.append(SyncEvent("info", "opened", inst.key,
                                     f"New position: {qty} {inst.symbol} at {inst.fmt(entry)} "
                                     f"({rules.bucket(bucket).name}"
@@ -150,19 +167,45 @@ def sync_trades(
             events += _after_the_fact(journal, t, rules, today)
         elif int(p.qty) > t.qty:
             added = int(p.qty) - t.qty
-            entry = p.avg_cost if p.avg_cost > 0 else t.entry
             new_qty = int(p.qty)
-            journal.update_trade(t.id, qty=new_qty, initial_qty=t.initial_qty + added, entry=entry,
-                                 target_qty=target_qty(new_qty, inst.lot_size, rules) if not t.has_exits else t.target_qty)
-            events.append(SyncEvent("warn", "added", inst.key,
-                                    f"{added} {inst.symbol} added to the open position (now {new_qty}). "
-                                    f"The rules allow one ${rules.slot_usd:,.0f} position per stock."))
+            usd = fx.get(inst.currency, 1.0)
+            planned = [f for f in fills if f.con_id == con_id and f.side == "BUY" and f.time > t.opened
+                       and parse_ref(f.order_ref)[0] == "add"]
+            tq = target_qty(new_qty, inst.lot_size, rules) if not t.has_exits else t.target_qty
+            if planned:
+                add_px = sum(f.qty * f.price for f in planned) / sum(f.qty for f in planned)
+                entry = (t.qty * t.entry + added * add_px) / new_qty
+                add_stop = initial_stop(add_px, a, rules, inst)
+                stop = max(t.stop, add_stop)
+                journal.update_trade(
+                    t.id, qty=new_qty, initial_qty=t.initial_qty + added, entry=entry, adds=t.adds + 1,
+                    stop=stop, stop_state=t.stop_state if stop >= entry else "initial", target_qty=tq,
+                    initial_risk_usd=(t.initial_risk_usd or 0.0) + inst.value(added, add_px - add_stop) * usd)
+                events.append(SyncEvent("info", "added", inst.key,
+                                        f"Added {added} {inst.symbol} at {inst.fmt(add_px)} (now {new_qty}). "
+                                        f"Stop raised to {inst.fmt(stop)}, so the whole position still risks about "
+                                        f"one fixed loss."))
+            else:
+                entry = p.avg_cost if p.avg_cost > 0 else t.entry
+                journal.update_trade(t.id, qty=new_qty, initial_qty=t.initial_qty + added, entry=entry,
+                                     adds=t.adds + 1, target_qty=tq)
+                events.append(SyncEvent("warn", "added", inst.key,
+                                        f"{added} {inst.symbol} added outside the dashboard (now {new_qty}). The stop "
+                                        f"stays at {inst.fmt(t.stop)}, so this position now risks more than one fixed "
+                                        f"loss. Adds from the dashboard move the stop up for you."))
 
-    # high-water marks
+    # high- and low-water marks (best and worst price since entry)
     for t in journal.open_trades():
         last = quotes.get(t.con_id)
-        if last is not None and last > t.high_water:
-            journal.update_trade(t.id, high_water=last)
+        if last is None:
+            continue
+        changes = {}
+        if last > t.high_water:
+            changes["high_water"] = last
+        if t.low_water is None or last < t.low_water:
+            changes["low_water"] = last
+        if changes:
+            journal.update_trade(t.id, **changes)
     return events
 
 
@@ -179,11 +222,16 @@ def _after_the_fact(journal: Journal, trade: Trade, rules: TradingRules, today: 
     if n > b.cap:
         out.append(SyncEvent("warn", "rule", trade.key,
                              f"{trade.symbol} puts {n} positions in {b.name}, over its cap of {b.cap}."))
-    st = strike_status(trade.key, journal.closed_trades(trade.key), today, rules)
+    if trade.sector:
+        same = sum(1 for t in others if t.sector == trade.sector) + 1
+        if same > rules.max_per_sector:
+            out.append(SyncEvent("warn", "rule", trade.key,
+                                 f"{trade.symbol} makes {same} positions in {trade.sector}, over the limit of "
+                                 f"{rules.max_per_sector}."))
+    st = strike_for(journal, trade.key, today, rules)
     if st.locked:
         out.append(SyncEvent("warn", "rule", trade.key,
-                             f"{trade.symbol} was bought while locked by the two-strike rule "
-                             f"(until {st.locked_until:%d %b})."))
+                             f"{trade.symbol} was bought while locked by the two-strike rule."))
     return out
 
 

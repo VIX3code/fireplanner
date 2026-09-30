@@ -1,4 +1,5 @@
-"""Trade management: sizing across five markets, the guardian, strikes, the gate, the dashboard.
+"""Trade management: fixed-loss sizing across five markets, the guardian, strikes, the gate,
+adds, time stops, market weather, circuit breakers, earnings, the journal and the dashboard.
 
 Most tests drive the real loop against `SimBroker`, so they exercise the same
 code paths as a paper account: sync, protection planning, order placement.
@@ -19,7 +20,13 @@ from fireplanner.trading import (
     Instrument, Journal, SimBroker, TradingRules, TradingService, import_watchlist, load_rules,
     parse_symbol, plan_entry, strike_status,
 )
+from dataclasses import replace
+
+from fireplanner.trading.breakers import breaker_state
 from fireplanner.trading.broker import OrderSpec
+from fireplanner.trading.earnings import EarningsCalendar, fmp_symbol, parse_fmp
+from fireplanner.trading.stats import journal_stats
+from fireplanner.trading.weather import MarketWeather, WeatherReading, read_weather
 from fireplanner.trading.buckets import Holding, bucket_mix, swing_share_after
 from fireplanner.trading.guardian import plan_protection
 from fireplanner.trading.ib_broker import IBBroker, _num, market_for
@@ -99,10 +106,13 @@ def test_stock_type_suggestion_and_stop_distance():
 
 def test_config_file_matches_the_agreed_rules():
     r = load_rules("config/config.yaml")
-    assert (r.slot_usd, r.max_slots, r.max_stop_pct, r.atr_stop_mult) == (5000, 20, 0.05, 2.5)
+    assert (r.risk_per_trade_usd, r.max_position_usd, r.max_invested_usd, r.max_slots) == (250, 10000, 100000, 20)
+    assert (r.max_stop_pct, r.atr_stop_mult, r.round_up) == (0.05, 2.5, True)
     assert [(b.id, b.target, b.cap) for b in r.buckets] == [
-        ("steady", 0.10, 20), ("core", 0.15, 10), ("volatile", 0.20, 5)]
-    assert (r.max_strikes, r.lockout_days, r.swing_guide) == (2, 10, 0.5)
+        ("steady", 0.10, 10), ("core", 0.15, 10), ("volatile", 0.20, 7)]
+    assert (r.max_strikes, r.lockout_days, r.swing_guide) == (2, None, 0.5)
+    assert (r.allow_add, r.max_adds, r.time_stop_weeks, r.max_per_sector) == (True, 1, 4, 4)
+    assert r.weather_multiplier("Defensive") == 0.5 and r.weather_multiplier("Risk-Off") == 0
 
 
 def test_a_typo_in_a_risk_limit_is_an_error(tmp_path):
@@ -114,51 +124,61 @@ def test_a_typo_in_a_risk_limit_is_an_error(tmp_path):
 
 # ---------------------------------------------------------------- sizing
 
-def test_us_volatile_trade_is_capped_at_five_percent():
-    p = plan_entry(us(), 190.40, 0.036, "volatile", RULES, 1.0)
-    assert p.qty == 26 and p.cost_usd <= 5000
-    assert p.stop_pct <= 0.05 + 1e-9 and p.stop_basis == "5% cap"
-    assert p.target == pytest.approx(p.limit * 1.2, abs=0.01)
-    assert p.target_qty == 13
-    assert p.max_loss_usd <= 250
+def test_every_trade_loses_the_same_fixed_amount_at_its_stop():
+    nv = plan_entry(us(), 190.40, 0.036, "volatile", RULES, 1.0)
+    assert nv.stop_pct <= 0.05 + 1e-9 and nv.stop_basis == "5% cap"
+    assert nv.qty == 27 and nv.max_loss_usd == pytest.approx(258.1, abs=0.1)   # rounded up: 26.2 -> 27
+    ko = plan_entry(us("KO"), 69.05, 0.011, "steady", RULES, 1.0)
+    assert ko.stop_pct == pytest.approx(0.0275, abs=0.002) and "ATR" in ko.stop_basis
+    assert ko.cost_usd > 1.7 * nv.cost_usd                  # tighter stop, bigger position...
+    assert ko.max_loss_usd == pytest.approx(250, abs=5)      # ...same loss
+    assert nv.target == pytest.approx(nv.limit * 1.2, abs=0.01) and nv.target_qty == 13
 
 
-def test_steady_trade_uses_the_tighter_atr_stop():
-    p = plan_entry(us("KO"), 69.05, 0.011, "steady", RULES, 1.0)
-    assert p.stop_pct == pytest.approx(0.0275, abs=0.002)
-    assert "ATR" in p.stop_basis
+def test_rounding_up_is_capped_and_so_is_the_position():
+    sh = plan_entry(us("SH"), 38.2, 0.006, "steady", RULES, 1.0)      # 1.5% stop: $250 would need $17k
+    assert sh.sized_by == "max position" and sh.cost_usd <= 10_000 and sh.max_loss_usd < 250
+    dbs = plan_entry(Instrument("D05", "SGX", 8, "SGD", 100), 49.2, 0.012, "steady", RULES, 0.77)
+    assert dbs.qty == 200 and dbs.sized_by == "rounded down"          # a 3rd lot would lose $342
+    down = plan_entry(us(), 190.40, 0.036, "volatile", replace(RULES, round_up=False), 1.0)
+    assert down.qty == 26 and down.max_loss_usd <= 250
 
 
-def test_tokyo_rounds_down_to_board_lots_and_blocks_a_lot_bigger_than_a_slot():
+def test_tokyo_trades_whole_lots_and_blocks_a_lot_that_loses_too_much():
     toyota = Instrument("7203", "TSEJ", 3, "JPY", 100)
     p = plan_entry(toyota, 2950, 0.018, "steady", RULES, 0.0067)
-    assert p.qty % 100 == 0 and p.qty == 200
-    assert p.cost_usd <= 5000
+    assert p.qty % 100 == 0 and p.qty == 300
+    assert p.max_loss_usd <= 250 * 1.2
     assert p.stop == round(p.stop) and p.target % 5 == 0     # yen ticks
-    pricey = Instrument("6758", "TSEJ", 4, "JPY", 100)
-    q = plan_entry(pricey, 9000, 0.02, "core", RULES, 0.0067)
-    assert q.qty == 0 and "more than the $5,000 slot" in q.problem
+    q = plan_entry(Instrument("6758", "TSEJ", 4, "JPY", 100), 9000, 0.02, "core", RULES, 0.0067)
+    assert q.qty == 0 and "fixed loss" in q.problem
 
 
 def test_london_prices_in_pence_are_valued_in_pounds():
     hsba = Instrument("HSBA", "LSE", 5, "GBP", 1, 100.0)
     p = plan_entry(hsba, 1000.0, 0.015, "steady", RULES, 1.27)
-    assert p.qty == 391
-    assert p.cost_local == pytest.approx(391 * 10.05)          # pounds, not pence
-    assert p.cost_usd <= 5000
+    assert p.qty == 533
+    assert p.cost_local == pytest.approx(533 * 10.05)          # pounds, not pence
+    assert p.max_loss_usd == pytest.approx(250, abs=2)
 
 
 def test_hong_kong_needs_a_known_board_lot():
     p = plan_entry(Instrument("700", "SEHK", 6, "HKD", 0), 500, 0.02, "core", RULES, 0.128)
     assert p.qty == 0 and "board lot" in p.problem
     ok = plan_entry(Instrument("9988", "SEHK", 7, "HKD", 100), 152.3, 0.03, "core", RULES, 0.128)
-    assert ok.qty == 200 and ok.target_qty == 100
+    assert ok.qty == 300 and ok.target_qty == 100
 
 
 def test_a_single_lot_sells_whole_at_the_target():
-    dbs = Instrument("D05", "SGX", 8, "SGD", 100)
-    p = plan_entry(dbs, 49.2, 0.012, "steady", RULES, 0.77)
+    p = plan_entry(Instrument("S68", "SGX", 8, "SGD", 100), 70.0, 0.012, "steady", RULES, 0.77)
     assert p.qty == 100 and p.target_qty == 100
+
+
+def test_weather_scales_the_fixed_loss():
+    half = plan_entry(us(), 190.40, 0.036, "volatile", RULES, 1.0, risk_usd=125)
+    assert half.qty == 14 and half.max_loss_usd <= 150
+    none = plan_entry(us(), 190.40, 0.036, "volatile", RULES, 1.0, risk_usd=0)
+    assert none.qty == 0 and "Risk-Off" in none.problem
 
 
 # ---------------------------------------------------------------- buckets
@@ -170,15 +190,16 @@ def test_bucket_mix_measures_money_and_daily_swing():
     assert mix["volatile"].money_share == pytest.approx(1 / 3)
     assert mix["volatile"].swing_share == pytest.approx(250 / (250 + 120))
     assert sum(b.money_share for b in mix.values()) == pytest.approx(1.0)
-    assert mix["volatile"].room == 4 and mix["core"].room == 10
+    assert mix["volatile"].room == 6 and mix["core"].room == 10
     before, after = swing_share_after(hs, Holding("D", "volatile", 5000, 5000, 0, 0.05))
     assert after > before
 
 
 def test_room_is_limited_by_the_whole_book():
-    hs = [Holding(str(i), "steady", 5000, 5000, 0, 0.01) for i in range(19)]
+    hs = [Holding(str(i), "core", 5000, 5000, 0, 0.03) for i in range(10)]
+    hs += [Holding(f"s{i}", "steady", 5000, 5000, 0, 0.01) for i in range(9)]
     mix = {b.id: b for b in bucket_mix(hs, RULES)}
-    assert mix["volatile"].room == 1 and mix["steady"].room == 1
+    assert mix["volatile"].room == 1 and mix["steady"].room == 1 and mix["core"].room == 0
 
 
 # ---------------------------------------------------------------- strikes
@@ -192,16 +213,27 @@ def _closed(journal, key, day, pct, cid=1):
                                at=datetime.fromisoformat(day).replace(hour=20, tzinfo=timezone.utc))
 
 
-def test_two_stop_outs_lock_a_stock_for_ten_trading_days():
+def test_two_stop_outs_lock_a_stock_until_you_unlock_it():
     j = Journal(":memory:")
     _closed(j, "MP:US", "2026-09-11", -0.05)
     s = strike_status("MP:US", j.closed_trades("MP:US"), date(2026, 9, 14), RULES)
     assert (s.strikes, s.tries_left, s.locked) == (1, 1, False)
     _closed(j, "MP:US", "2026-09-24", -0.05)
-    s = strike_status("MP:US", j.closed_trades("MP:US"), date(2026, 9, 25), RULES)
+    s = strike_status("MP:US", j.closed_trades("MP:US"), date(2026, 12, 25), RULES)
+    assert s.locked and s.manual and s.unlocks_on is None       # months later: still locked
+    j.unlock("MP:US", at=datetime(2026, 12, 26, tzinfo=timezone.utc))
+    s = strike_status("MP:US", j.closed_trades("MP:US"), date(2026, 12, 26), RULES, j.last_unlock("MP:US"))
+    assert not s.locked and s.strikes == 0 and s.tries_left == 2
+
+
+def test_a_timed_lock_ends_by_itself():
+    rules = replace(RULES, lockout_days=10)
+    j = Journal(":memory:")
+    _closed(j, "MP:US", "2026-09-11", -0.05)
+    _closed(j, "MP:US", "2026-09-24", -0.05)
+    s = strike_status("MP:US", j.closed_trades("MP:US"), date(2026, 9, 25), rules)
     assert s.locked and s.locked_until == date(2026, 10, 8) and s.unlocks_on == date(2026, 10, 9)
-    later = strike_status("MP:US", j.closed_trades("MP:US"), date(2026, 10, 9), RULES)
-    assert not later.locked and later.strikes == 0 and later.tries_left == 2
+    assert not strike_status("MP:US", j.closed_trades("MP:US"), date(2026, 10, 9), rules).locked
 
 
 def test_a_win_or_a_scratch_resets_the_count():
@@ -229,7 +261,7 @@ def test_a_new_position_gets_a_stop_and_half_target_in_one_oca_group():
     buy(broker, svc, nv, 190.0)
     stop, = managed(broker, "stop")
     target, = managed(broker, "target")
-    assert (stop.qty, stop.order_type, stop.tif) == (26, "STP", "GTC")
+    assert (stop.qty, stop.order_type, stop.tif) == (27, "STP", "GTC")
     assert stop.stop_price == pytest.approx(180.5)
     assert (target.qty, target.limit_price) == (13, 228.0)
     assert stop.oca_group == target.oca_group != ""
@@ -257,7 +289,7 @@ def test_target_fill_leaves_a_trailing_stop_on_the_rest():
     buy(broker, svc, nv, 190.0)
     broker.set_price(1, 229.0); svc.cycle()
     stop, = managed(broker, "stop")
-    assert stop.qty == 13 and not managed(broker, "target")
+    assert stop.qty == 14 and not managed(broker, "target")
     assert stop.stop_price > 190.0
     ev = journal.events(10)
     assert not any(e["level"] == "crit" for e in ev)        # expected, not an emergency
@@ -280,7 +312,7 @@ def test_a_position_without_a_stop_is_repaired_with_a_critical_alert():
 def test_a_manual_stop_is_respected_and_a_tightened_stop_is_adopted():
     broker, journal, svc = make()
     ko = broker.add(us("KO", 2), 68.0, 0.011)
-    broker.place(OrderSpec(2, "SELL", "STP", 73, stop_price=66.0, tif="GTC"))   # the user's own stop
+    broker.place(OrderSpec(2, "SELL", "STP", 200, stop_price=66.0, tif="GTC"))  # the user's own stop
     buy(broker, svc, ko, 68.0)
     assert not managed(broker, "stop")
     assert any("placed yourself" in e["message"] for e in journal.events(10))
@@ -353,28 +385,31 @@ def test_dry_run_sends_nothing():
 
 # ---------------------------------------------------------------- the whole loop
 
-def test_two_stop_outs_then_the_gate_blocks_a_third_try():
+def test_two_stop_outs_then_the_gate_blocks_a_third_try_until_unlocked():
     broker, journal, svc = make()
     broker.add(us("MP", 9), 64.0, 0.061)
     for day, entry, exit_px in (("2026-09-10", 64.0, 59.5), ("2026-09-14", 62.5, 58.5)):
         broker.clock = datetime.fromisoformat(day).replace(hour=15, tzinfo=timezone.utc)
         broker._price[9] = entry
         svc.cycle()
-        assert svc.enter("MP", bucket="volatile", limit=entry)["ok"]
+        assert svc.enter("MP", bucket="volatile", limit=entry, setup="Breakout")["ok"]
         svc.cycle()
         broker.clock += timedelta(days=1)
         broker.set_price(9, exit_px)
         svc.cycle()
     assert [t.strike for t in journal.closed_trades("MP:US")] == [1, 1]
+    assert [t.setup for t in journal.closed_trades("MP:US")] == ["Breakout", "Breakout"]
     r = svc.enter("MP", limit=58.5)
     assert not r["ok"] and "two-strike" in r["message"]
-    broker.clock = datetime(2026, 10, 1, 15, tzinfo=timezone.utc)
+    broker.clock = datetime(2026, 11, 1, 15, tzinfo=timezone.utc)
+    assert svc.check("MP")["verdict"] == "blocked"                   # a month on, still locked
+    svc.unlock("MP")
     assert svc.check("MP")["verdict"] != "blocked"
 
 
 def test_the_gate_blocks_a_full_bucket_and_checks_cash():
     broker, journal, svc = make(cash=100_000)
-    for i in range(5):
+    for i in range(7):
         buy(broker, svc, broker.add(us(f"V{i}", 100 + i), 50.0, 0.05), 50.0)
     broker.add(us("V9", 199), 50.0, 0.05)
     res = svc.check("V9")
@@ -388,17 +423,30 @@ def test_the_gate_blocks_a_full_bucket_and_checks_cash():
 
 def test_a_buy_outside_the_dashboard_is_protected_and_flagged():
     broker, journal, svc = make()
-    for i in range(6):                                      # the 6th breaks the Volatile cap
+    for i in range(8):                                      # the 8th breaks the Volatile cap of 7
         buy(broker, svc, broker.add(us(f"V{i}", 100 + i), 50.0, 0.05), 50.0)
-    assert len(managed(broker, "stop")) == 6
-    assert any("over its cap of 5" in e["message"] for e in journal.events(40))
+    assert len(managed(broker, "stop")) == 8
+    assert any("over its cap of 7" in e["message"] for e in journal.events(60))
+
+
+def test_sector_capital_and_open_risk_caps_block():
+    broker, journal, svc = make(cash=200_000)
+    for i in range(4):
+        buy(broker, svc, broker.add(us(f"S{i}", 10 + i, sector="Semiconductors"), 100.0, 0.02), 100.0)
+    broker.add(us("S9", 19, sector="Semiconductors"), 100.0, 0.02)
+    res = svc.check("S9")
+    assert any(c["title"] == "Sector full: Semiconductors" for c in res["checks"])
+    svc.rules = replace(svc.rules, max_invested_usd=25_000, max_open_risk_usd=900)
+    broker.add(us("KO", 2), 68.0, 0.011)
+    titles = {c["title"] for c in svc.check("KO")["checks"]}
+    assert {"Over the capital limit", "Too much open risk"} <= titles
 
 
 def test_entry_refuses_when_the_price_moved_or_ibkr_disagrees(monkeypatch):
     broker, journal, svc = make()
     broker.add(us(), 190.0, 0.036)
     svc.cycle()
-    r = svc.enter("NVDA", expect_qty=99)
+    r = svc.enter("NVDA", expect_qty=999)
     assert not r["ok"] and "size changed" in r["message"]
     monkeypatch.setattr(broker, "preview_cost_usd", lambda spec: 500_000.0)
     r = svc.enter("NVDA")
@@ -425,21 +473,28 @@ def demo():
 
 def test_demo_book_obeys_every_rule(demo):
     _, state = demo
-    ps = state["positions"]
-    assert len(ps) == 15 and all(p["protected"] for p in ps)
-    for p in ps:
-        assert p["cost_usd"] <= 5000 + 1e-6
-        if p["stop_state"] == "initial":
-            assert p["stop"] / p["entry"] >= 0.95 - 1e-9
-        else:
-            assert p["stop"] >= p["entry"]
-    vol = next(b for b in state["buckets"] if b["id"] == "volatile")
-    assert vol["n"] <= vol["cap"]
+    ps = {p["key"]: p for p in state["positions"]}
+    assert len(ps) == 13 and all(p["protected"] for p in ps.values())
+    for p in ps.values():
+        assert p["risk_usd"] <= 250 * 1.2 + 1                 # a fixed loss, give or take a lot
+        if p["stop_state"] != "initial":
+            assert p["stop"] >= p["entry"] - 1e-9
+    assert ps["7203:TSEJ"]["risk_usd"] <= 125 * 1.2           # Tokyo is Defensive: half size
+    assert ps["JNJ:US"]["time_stop"] and not ps["MSFT:US"]["time_stop"]
+    assert ps["NVDA:US"]["adds"] == 1 and not ps["NVDA:US"]["can_add"]
+    assert ps["GOOGL:US"]["can_add"]
+    assert ps["WMT:US"]["half_sold"] and ps["WMT:US"]["stop_state"] == "trailing"
+    assert ps["NVDA:US"]["earnings"]["days"] == 2
+    for b in state["buckets"]:
+        assert b["n"] <= b["cap"]
     strikes = {s["key"]: s for s in state["strikes"]}
-    assert strikes["MP:US"]["locked"] and strikes["MP:US"]["unlocks_on"] == "2026-10-09"
+    assert strikes["MP:US"]["locked"] and strikes["MP:US"]["manual"]
     assert strikes["AMD:US"]["strikes"] == 1 and strikes["AMD:US"]["held"]
-    wmt = next(p for p in ps if p["symbol"] == "WMT")
-    assert wmt["half_sold"] and wmt["stop_state"] == "trailing"
+    assert state["weather"]["TSEJ"]["label"] == "Defensive" and state["weather"]["US"]["label"] == "Risk-On"
+    assert not state["breaker"]["paused"] and state["breaker"]["losses_in_a_row"] == 2
+    st = state["journal"]["stats"]
+    assert st["all"]["trades"] == 11 and st["all"]["expectancy_r"] > 0
+    assert st["by_bucket"]["volatile"]["win_rate"] == 0
 
 
 def test_demo_checks_show_each_kind_of_verdict(demo):
@@ -448,8 +503,10 @@ def test_demo_checks_show_each_kind_of_verdict(demo):
     assert c["MP:US"]["verdict"] == "blocked"
     assert c["700:SEHK"]["verdict"] == "blocked" and c["700:SEHK"]["plan"]["qty"] == 0
     assert c["HOOD:US"]["verdict"] == "warning"
+    assert any(x["title"].startswith("Earnings in 5 days") for x in c["HOOD:US"]["checks"])
     assert any("Leveraged inverse" in x["title"] for x in c["SQQQ:US"]["checks"])
     assert any(x["title"] == "Last try on this stock" for x in c["COIN:US"]["checks"])
+    assert not any(x["title"] == "Above the swing guide" for x in c["HD:US"]["checks"])   # Steady lowers it
 
 
 # ---------------------------------------------------------------- dashboard server
@@ -488,8 +545,10 @@ def test_dashboard_api_round_trip():
     try:
         assert call("/api/state")["totals"]["open"] == 0
         res = call("/api/check", {"symbol": "NVDA"})
-        assert res["plan"]["qty"] == 26 and res["verdict"] in ("allowed", "warning")
-        assert call("/api/enter", {"symbol": "NVDA", "expect_qty": 26})["ok"]
+        assert res["plan"]["qty"] == 27 and res["verdict"] in ("allowed", "warning")
+        assert call("/api/enter", {"symbol": "NVDA", "expect_qty": 27, "setup": "Pullback"})["ok"]
+        assert call("/api/settings", {"time_stop_weeks": 6})["ok"]
+        assert svc.rules.time_stop_weeks == 6
         with pytest.raises(urllib.error.HTTPError) as e:
             call("/api/state", token="wrong")
         assert e.value.code == 401
@@ -530,3 +589,213 @@ def test_watchlist_import_reads_a_tws_export():
     text = "Symbol,Exchange\nDES,AAPL,STK,SMART/NASDAQ\nDES,700,STK,SEHK\n0005,SEHK\nD05,SGX\n7203,TSEJ\n\nHSBA,LSE\n"
     added = import_watchlist(j, text)
     assert added == ["AAPL:US", "700:SEHK", "5:SEHK", "D05:SGX", "7203:TSEJ", "HSBA:LSE"]
+
+
+# ---------------------------------------------------------------- adds, time stops, settings
+
+def test_add_to_a_winner_raises_the_stop_so_the_position_risks_one_loss():
+    broker, journal, svc = make()
+    nv = broker.add(us(), 190.0, 0.036)
+    buy(broker, svc, nv, 190.0)
+    r = svc.add_to("NVDA:US")
+    assert not r["ok"] and any("Only winners" in c["detail"] for c in r["check"]["checks"])   # stop below entry
+    broker.set_price(1, 201.0); svc.cycle()                            # +5.8%: stop to entry
+    r = svc.add_to("NVDA:US", limit=201.0)
+    assert r["ok"], r["message"]
+    svc.cycle()
+    t = journal.open_trades()[0]
+    assert t.adds == 1 and t.qty > 27
+    assert t.stop == pytest.approx(190.95)                             # 5% under the 201.00 add
+    stop, = managed(broker, "stop")
+    assert stop.qty == t.qty and stop.stop_price == pytest.approx(t.stop)
+    risk = (t.entry - t.stop) * t.qty
+    assert risk < 250                                                  # the whole position: under one loss
+    again = svc.add_to("NVDA:US", limit=201.0)
+    assert not again["ok"] and any("Already added" in c["detail"] for c in again["check"]["checks"])
+
+
+def test_time_stop_flags_then_sells_when_told_to():
+    broker, journal, svc = make()
+    zs = broker.add(us("ZS", 3), 288.0, 0.039)
+    buy(broker, svc, zs, 288.0)
+    broker.clock += timedelta(days=29)
+    broker.set_price(3, 292.0)
+    state = svc.cycle()
+    assert state["positions"][0]["time_stop"]
+    assert any(e["kind"] == "time-stop" for e in journal.events(10))
+    svc.rules = replace(svc.rules, time_stop_action="sell")
+    svc._said.clear()
+    svc.cycle()
+    broker.set_price(3, 292.0); svc.cycle()
+    t = journal.closed_trades()[0]
+    assert {e.kind for e in journal.exits(t.id)} == {"time-stop"}
+    assert not managed(broker)
+
+
+def test_selling_from_the_dashboard_cancels_the_stop_and_target():
+    broker, journal, svc = make()
+    nv = broker.add(us(), 190.0, 0.036)
+    buy(broker, svc, nv, 190.0)
+    assert svc.exit_position("NVDA")["ok"]
+    svc.cycle()
+    assert journal.closed_trades()[0].status == "closed" and not managed(broker)
+    assert {e.kind for e in journal.exits(journal.closed_trades()[0].id)} == {"exit"}
+
+
+def test_settings_are_clamped_kept_and_survive_a_restart():
+    broker, journal, svc = make()
+    svc.set_settings(time_stop_weeks=100, earnings_warn_days=3)
+    assert svc.rules.time_stop_weeks == 26 and svc.rules.earnings_warn_days == 3
+    again = TradingService(broker, journal, RULES)
+    assert again.rules.time_stop_weeks == 26
+
+
+# ---------------------------------------------------------------- weather
+
+def test_weather_reads_the_real_spy_snapshot():
+    from fireplanner.data import SnapshotProvider
+    sp = SnapshotProvider("data/snapshots")
+    r = read_weather("US", "SPY", {"index": sp.history("SPY")["close"], "vix": sp.history("VIX")["close"],
+                                   "breadth": sp.history("RSP")["close"]}, RULES)
+    assert r.label in RULES.weather_sizing and 0 <= r.score <= 1
+    assert read_weather("US", "SPY", {"index": sp.history("SPY")["close"].tail(50)}, RULES).label is None
+
+
+def _weather(svc, label, mult):
+    svc.weather = MarketWeather(svc.rules, {}, lambda s: None)
+    svc.weather.readings = {"US": WeatherReading("US", "SPY", label, 0.3, mult, "2026-09-01", {})}
+
+
+def test_defensive_weather_halves_size_and_risk_off_blocks():
+    broker, journal, svc = make()
+    broker.add(us(), 190.4, 0.036)
+    svc.cycle()
+    _weather(svc, "Defensive", 0.5)
+    res = svc.check("NVDA")
+    assert res["plan"]["risk_budget_usd"] == 125 and res["verdict"] == "warning"
+    _weather(svc, "Risk-Off", 0.0)
+    assert svc.check("NVDA")["verdict"] == "blocked"
+
+
+# ---------------------------------------------------------------- circuit breakers
+
+def test_three_stop_outs_in_a_row_pause_buys_until_resumed():
+    broker, journal, svc = make()
+    for i, day in enumerate(("2026-09-01", "2026-09-02", "2026-09-03")):
+        _closed(journal, f"L{i}:US", day, -0.05, cid=50 + i)
+    now = datetime(2026, 9, 4, 15, tzinfo=timezone.utc)
+    st = breaker_state(journal, RULES, now)
+    assert st.paused and st.losses_in_a_row == 3
+    _closed(journal, "W:US", "2026-09-04", 0.10, cid=60)             # a win doesn't lift it...
+    assert breaker_state(journal, RULES, now).paused
+    journal.breaker_event("resume", at=datetime(2026, 9, 4, 18, tzinfo=timezone.utc))   # ...you do
+    assert not breaker_state(journal, RULES, datetime(2026, 9, 4, 19, tzinfo=timezone.utc)).paused
+
+
+def test_daily_loss_limit_and_kill_switch():
+    broker, journal, svc = make()
+    broker.add(us(), 190.4, 0.036)
+    broker.add(us("KO", 2), 69.0, 0.011)
+    svc.cycle()
+    broker._price[1] = 190.4
+    assert svc.enter("NVDA", limit=180.0)["ok"]                        # a limit below the market: rests
+    assert [o for o in broker.open_orders() if o.role == "entry"]
+    r = svc.kill()
+    assert "1 buy order" in r["message"]
+    assert not [o for o in broker.open_orders() if o.role == "entry"]
+    assert svc.check("KO")["verdict"] == "blocked"
+    svc.resume()
+    assert svc.check("KO")["verdict"] != "blocked"
+    for i in range(3):
+        _closed(journal, f"D{i}:US", T0.date().isoformat(), -0.30, cid=70 + i)      # -$300 each
+    broker.clock = T0.replace(hour=20)
+    st = breaker_state(journal, RULES, broker.clock)
+    assert st.paused and any("Daily loss limit" in x for x in st.reasons)
+
+
+def test_buys_per_day_are_capped():
+    broker, journal, svc = make(cash=1_000_000)
+    svc.rules = replace(svc.rules, max_entries_per_day=2)
+    for i in range(3):
+        broker.add(us(f"B{i}", 80 + i), 50.0, 0.05)
+    svc.cycle()
+    assert svc.enter("B0", limit=40.0)["ok"] and svc.enter("B1", limit=40.0)["ok"]
+    r = svc.enter("B2", limit=40.0)
+    assert not r["ok"] and "Daily buy limit" in r["message"]
+
+
+# ---------------------------------------------------------------- earnings
+
+def test_earnings_inside_the_window_warn_or_block():
+    broker, journal, svc = make()
+    broker.add(us(), 190.4, 0.036)
+    svc.cycle()
+    svc.set_earnings("NVDA", "2026-09-04")
+    res = svc.check("NVDA")
+    assert any(c["title"].startswith("Earnings in 3 days") and c["level"] == "warn" for c in res["checks"])
+    svc.rules = replace(svc.rules, earnings_block=True)
+    assert svc.check("NVDA")["verdict"] == "blocked"
+
+
+def test_fmp_symbols_and_parsing():
+    assert fmp_symbol("BRK.B", "US") == "BRK-B" and fmp_symbol("700", "SEHK") == "0700.HK"
+    assert fmp_symbol("D05", "SGX") == "D05.SI" and fmp_symbol("7203", "TSEJ") == "7203.T"
+    assert fmp_symbol("HSBA", "LSE") == "HSBA.L"
+    rows = [{"date": "2026-07-30", "epsActual": 1.2}, {"date": "2026-10-29", "epsActual": None}, {"x": 1}]
+    assert parse_fmp(rows, date(2026, 9, 30)) == date(2026, 10, 29)
+    assert parse_fmp({"Error Message": "bad key"}, date(2026, 9, 30)) is None
+
+
+def test_earnings_calendar_fetches_but_never_overrides_your_date():
+    j = Journal(":memory:")
+    calls = []
+
+    def fake(url):
+        calls.append(url)
+        return [{"date": "2026-10-20"}]
+
+    cal = EarningsCalendar(j, api_key="k", fetch=fake)
+    j.set_earnings("AAPL:US", date(2026, 10, 15), source="manual")
+    assert cal.refresh(["AAPL:US", "700:SEHK"], date(2026, 9, 30)) == 1
+    assert "symbol=0700.HK" in calls[0]
+    up = cal.upcoming(date(2026, 9, 30))
+    assert up["AAPL:US"]["date"] == "2026-10-15" and up["700:SEHK"]["days"] == 20
+    assert cal.refresh(["700:SEHK"], date(2026, 9, 30)) == 0             # once a day
+
+
+# ---------------------------------------------------------------- journal
+
+def test_journal_stats_are_in_r():
+    j = Journal(":memory:")
+    _closed(j, "A:US", "2026-09-01", -0.05)                              # a full stop-out
+    t = _closed(j, "B:US", "2026-09-02", 0.10, cid=2)                     # twice the risk
+    assert t.r_multiple is None                                           # no risk recorded: from prices
+    st = journal_stats(j.closed_trades(), datetime(2026, 9, 3, tzinfo=timezone.utc))
+    assert st["all"]["trades"] == 2 and st["all"]["win_rate"] == 0.5
+    assert st["all"]["expectancy_r"] == pytest.approx(0.5)
+    assert st["by_bucket"]["volatile"]["avg_win_r"] == pytest.approx(2.0)
+
+
+def test_an_older_journal_is_upgraded_in_place(tmp_path):
+    import sqlite3
+    path = tmp_path / "old.sqlite"
+    db = sqlite3.connect(path)
+    db.execute("CREATE TABLE trades (id INTEGER PRIMARY KEY, key TEXT, symbol TEXT, market TEXT, con_id INTEGER,"
+               " currency TEXT, bucket TEXT, entry REAL, qty INTEGER, initial_qty INTEGER, atr REAL, stop REAL,"
+               " initial_stop REAL, target REAL, target_qty INTEGER, stop_state TEXT, high_water REAL,"
+               " opened_at TEXT, closed_at TEXT, status TEXT, exited_qty INTEGER, exit_value REAL,"
+               " realized_pct REAL, realized_usd REAL, strike INTEGER, oca_rev INTEGER, source TEXT, note TEXT)")
+    db.commit()
+    db.close()
+    j = Journal(path)
+    t = j.open_trade(key="X:US", symbol="X", market="US", con_id=1, currency="USD", bucket="core", entry=10,
+                     qty=1, atr=None, stop=9.5, target=11.5, target_qty=1, setup="Base")
+    assert t.setup == "Base" and t.adds == 0
+
+
+def test_journal_csv_lists_closed_trades():
+    from fireplanner.trading.server import journal_csv
+    j = Journal(":memory:")
+    _closed(j, "A:US", "2026-09-01", -0.05)
+    lines = journal_csv(j).strip().splitlines()
+    assert lines[0].startswith("id,stock,type,setup") and "A:US" in lines[1]

@@ -79,7 +79,49 @@ CREATE TABLE IF NOT EXISTS bucket_choice (
     bucket TEXT NOT NULL,
     confirmed_at TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS unlocks (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    key TEXT NOT NULL,
+    at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS settings (
+    key TEXT PRIMARY KEY,
+    value TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS earnings (
+    key TEXT PRIMARY KEY,
+    date TEXT,
+    source TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS breaker (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    at TEXT NOT NULL,
+    kind TEXT NOT NULL,
+    note TEXT NOT NULL DEFAULT ''
+);
+CREATE TABLE IF NOT EXISTS pending (
+    key TEXT PRIMARY KEY,
+    setup TEXT NOT NULL DEFAULT '',
+    note TEXT NOT NULL DEFAULT '',
+    at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS sectors (
+    key TEXT PRIMARY KEY,
+    sector TEXT NOT NULL,
+    source TEXT NOT NULL
+);
 """
+
+#: Columns added after the first release; added in place to an older journal.
+_TRADE_MIGRATIONS = {
+    "setup": "TEXT NOT NULL DEFAULT ''",
+    "initial_risk_usd": "REAL",
+    "adds": "INTEGER NOT NULL DEFAULT 0",
+    "sector": "TEXT NOT NULL DEFAULT ''",
+    "low_water": "REAL",
+}
 
 
 def now_utc() -> datetime:
@@ -124,6 +166,11 @@ class Trade:
     oca_rev: int
     source: str
     note: str
+    setup: str = ""
+    initial_risk_usd: float | None = None
+    adds: int = 0
+    sector: str = ""
+    low_water: float | None = None
 
     @property
     def opened(self) -> datetime:
@@ -141,6 +188,18 @@ class Trade:
     @property
     def oca_group(self) -> str:
         return f"fp-{self.id}-{self.oca_rev}"
+
+    @property
+    def r_multiple(self) -> float | None:
+        """Result in units of the risk taken: -1 is a full stop-out."""
+        if self.realized_usd is None or not self.initial_risk_usd:
+            return None
+        return self.realized_usd / self.initial_risk_usd
+
+    @property
+    def days_held(self) -> int:
+        end = _parse(self.closed_at) or now_utc()
+        return max(0, (end.date() - self.opened.date()).days)
 
 
 @dataclass
@@ -168,6 +227,10 @@ class Journal:
         self._lock = threading.RLock()
         with self._lock:
             self._db.executescript(_SCHEMA)
+            have = {r[1] for r in self._db.execute("PRAGMA table_info(trades)")}
+            for col, decl in _TRADE_MIGRATIONS.items():
+                if col not in have:
+                    self._db.execute(f"ALTER TABLE trades ADD COLUMN {col} {decl}")
             self._db.commit()
 
     def close(self) -> None:
@@ -186,14 +249,16 @@ class Journal:
     # -- trades ----------------------------------------------------------
     def open_trade(self, *, key, symbol, market, con_id, currency, bucket, entry, qty, atr,
                    stop, target, target_qty, opened_at: datetime | None = None,
-                   source: str = "broker", note: str = "") -> Trade:
+                   source: str = "broker", note: str = "", setup: str = "",
+                   initial_risk_usd: float | None = None, sector: str = "") -> Trade:
         cur = self._exec(
             """INSERT INTO trades (key, symbol, market, con_id, currency, bucket, entry, qty, initial_qty,
-                   atr, stop, initial_stop, target, target_qty, high_water, opened_at, source, note)
-               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                   atr, stop, initial_stop, target, target_qty, high_water, low_water, opened_at, source, note,
+                   setup, initial_risk_usd, sector)
+               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
             (key, symbol, market, int(con_id), currency, bucket, float(entry), int(qty), int(qty),
-             atr, float(stop), float(stop), float(target), int(target_qty), float(entry),
-             _iso(opened_at or now_utc()), source, note),
+             atr, float(stop), float(stop), float(target), int(target_qty), float(entry), float(entry),
+             _iso(opened_at or now_utc()), source, note, setup, initial_risk_usd, sector),
         )
         return self.trade(cur.lastrowid)
 
@@ -256,6 +321,84 @@ class Journal:
             realized_pct=realized_pct, realized_usd=realized_usd,
             strike=int(realized_pct < -strike_loss_pct),
         )
+
+    def closed_since(self, since: datetime) -> list[Trade]:
+        rows = self._rows("SELECT * FROM trades WHERE status = 'closed' AND closed_at >= ? ORDER BY closed_at, id",
+                          (_iso(since),))
+        return [Trade(**{k: r[k] for k in _TRADE_FIELDS}) for r in rows]
+
+    # -- unlocks, settings, breaker ------------------------------------------
+    def unlock(self, key: str, at: datetime | None = None) -> None:
+        self._exec("INSERT INTO unlocks (key, at) VALUES (?, ?)", (key, _iso(at or now_utc())))
+
+    def last_unlock(self, key: str) -> datetime | None:
+        rows = self._rows("SELECT at FROM unlocks WHERE key = ? ORDER BY id DESC LIMIT 1", (key,))
+        return _parse(rows[0]["at"]) if rows else None
+
+    def set_setting(self, key: str, value) -> None:
+        import json
+        self._exec(
+            """INSERT INTO settings (key, value, updated_at) VALUES (?,?,?)
+               ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at""",
+            (key, json.dumps(value), _iso(now_utc())),
+        )
+
+    def settings(self) -> dict:
+        import json
+        return {r["key"]: json.loads(r["value"]) for r in self._rows("SELECT key, value FROM settings")}
+
+    def breaker_event(self, kind: str, note: str = "", at: datetime | None = None) -> None:
+        self._exec("INSERT INTO breaker (at, kind, note) VALUES (?,?,?)", (_iso(at or now_utc()), kind, note))
+
+    def breaker_events_since(self, since: datetime) -> list[dict]:
+        return [dict(r) for r in self._rows("SELECT * FROM breaker WHERE at >= ? ORDER BY id", (_iso(since),))]
+
+    def last_breaker_event(self, kinds: tuple[str, ...] = ("pause", "resume", "kill")) -> dict | None:
+        marks = ",".join("?" * len(kinds))
+        rows = self._rows(f"SELECT * FROM breaker WHERE kind IN ({marks}) ORDER BY id DESC LIMIT 1", kinds)
+        return dict(rows[0]) if rows else None
+
+    def set_pending(self, key: str, setup: str = "", note: str = "") -> None:
+        """Remember the setup and note typed with a buy until its trade opens."""
+        self._exec(
+            """INSERT INTO pending (key, setup, note, at) VALUES (?,?,?,?)
+               ON CONFLICT(key) DO UPDATE SET setup = excluded.setup, note = excluded.note, at = excluded.at""",
+            (key, setup, note, _iso(now_utc())),
+        )
+
+    def pop_pending(self, key: str) -> dict | None:
+        rows = self._rows("SELECT * FROM pending WHERE key = ?", (key,))
+        if not rows:
+            return None
+        self._exec("DELETE FROM pending WHERE key = ?", (key,))
+        return dict(rows[0])
+
+    # -- earnings and sectors --------------------------------------------------
+    def set_earnings(self, key: str, day: date | None, source: str = "manual") -> None:
+        self._exec(
+            """INSERT INTO earnings (key, date, source, updated_at) VALUES (?,?,?,?)
+               ON CONFLICT(key) DO UPDATE SET date = excluded.date, source = excluded.source,
+                                              updated_at = excluded.updated_at""",
+            (key, day.isoformat() if day else None, source, _iso(now_utc())),
+        )
+
+    def earnings(self) -> dict[str, dict]:
+        out = {}
+        for r in self._rows("SELECT * FROM earnings"):
+            out[r["key"]] = {"date": date.fromisoformat(r["date"]) if r["date"] else None,
+                             "source": r["source"], "updated_at": _parse(r["updated_at"])}
+        return out
+
+    def set_sector(self, key: str, sector: str, source: str = "manual") -> None:
+        self._exec(
+            """INSERT INTO sectors (key, sector, source) VALUES (?,?,?)
+               ON CONFLICT(key) DO UPDATE SET sector = excluded.sector, source = excluded.source
+               WHERE sectors.source != 'manual' OR excluded.source = 'manual'""",
+            (key, sector, source),
+        )
+
+    def sectors(self) -> dict[str, str]:
+        return {r["key"]: r["sector"] for r in self._rows("SELECT key, sector FROM sectors")}
 
     # -- events ----------------------------------------------------------
     def log(self, level: str, kind: str, message: str, key: str | None = None, at: datetime | None = None) -> None:

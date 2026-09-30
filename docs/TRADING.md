@@ -1,9 +1,10 @@
 # Trade management: the Swing Desk
 
 The analysis side of FirePlanner tells you what the market is doing. This side manages a
-position from the moment you buy it: it puts a GTC stop and a target on it at IBKR, moves the
-stop up as the trade works, keeps the book from piling into volatile names, and remembers every
-stop-out.
+position from the moment you buy it: it sizes every trade for the same fixed loss, puts a GTC
+stop and a target on it at IBKR, moves the stop up as the trade works, keeps the book from piling
+into volatile names or one sector, pauses new buys when the market or your results turn, and
+journals every trade in R.
 
 ```bash
 fireplanner trade demo -o swing_desk.html        # the dashboard on a simulated book, no IBKR needed
@@ -13,36 +14,51 @@ fireplanner --port 4002 trade check 700:HK       # the pre-trade check for one s
 fireplanner trade watch add NVDA D05:SG 7203:JP  # edit the watchlist
 fireplanner trade watch import tws_export.csv    # import a TWS watchlist export
 fireplanner trade bucket NVDA volatile           # confirm a stock's type
+fireplanner trade earnings NVDA 2026-10-28       # set an earnings date (or "clear")
+fireplanner trade unlock MP                      # unlock a stock after two stop-outs
 ```
 
 ---
 
 ## The rules
 
-All of them live in the `trading:` section of `config/config.yaml`.
+All of them live in the `trading:` section of `config/config.yaml`. The few marked ⚙ can also be
+changed on the dashboard's Settings card.
 
 | Rule | Setting |
 |---|---|
-| Position size | **$5,000** per trade, converted to the stock's currency, rounded **down** to whole shares or board lots |
-| Book limit | **20** open positions |
-| Stop | GTC, the **tighter of 5% or 2.5 × the average daily range** below entry (max loss ≈ $250 before gaps) |
-| Stock types | **Steady** (moves < 2% a day, target +10%, cap 20) · **Core** (2–3.5%, +15%, cap 10) · **Volatile** (> 3.5%, +20%, cap 5) |
+| **Fixed loss per trade** ⚙ | every position is sized so its stop costs **$250** (before gaps). A tight stop means a bigger position. |
+| Position cap | no single position (or add) over **$10,000**; the book at most **$100,000** and **20** positions |
+| Rounding | share and lot counts round **up**, unless that adds more than 20% to the loss, then down |
+| Stop | GTC, the **tighter of 5% or 2.5 × the average daily range** below entry |
+| Stock types | **Steady** (moves < 2% a day, target +10%, max 10) · **Core** (2–3.5%, +15%, max 10) · **Volatile** (> 3.5%, +20%, max 7) |
 | At the target | sell **half**, trail the rest |
-| Stop ratchet | to the **entry price** once the stock has been +5%, then **3 × daily range** under the high since entry. Never down. |
-| Two strikes | after a stop-out you may re-enter once; a **second stop-out in a row locks the stock for 10 trading days** |
-| One per stock | no second position in a stock you already hold |
+| Stop ratchet | to the **entry price** once the stock has been +5%, then **3 × daily range** under the high. Never down. |
+| Two strikes | after a stop-out you may re-enter once; a **second stop-out in a row locks the stock until you unlock it** |
+| Add to a winner | **one** add, only once the stop is at entry or better, sized for the same fixed loss; the whole position's stop moves up so it still risks about one fixed loss |
+| Time stop ⚙ | a position that hasn't reached **+5% within 4 weeks** is flagged (or sold, with `time_stop_action: sell`) |
+| Earnings ⚙ | shown beside every stock; a buy within **7 days** of a report is warned (or blocked, with `earnings_block: true`) |
+| Market weather | new buys in a **Defensive** market risk half the fixed loss; **Risk-Off** blocks them |
+| Sector cap | at most **4** positions in one industry group |
+| Open-risk cap | the book can't lose more than **$5,000** if every stop hits at once |
 | Swing guide | a **warning** when Volatile would drive more than 50% of the book's daily swing |
+| Circuit breakers | new buys pause after **$750** lost in a day, **$1,500** in a week, or **3 stop-outs in a row** (until you resume); a **kill switch** cancels working buys; at most **10** buys a day |
 
-The stock type is **suggested** from the 14-day average daily range and **confirmed** by you on
-the dashboard (or with `trade bucket`). A confirmed type moves an open position's target.
+A stop-out is any exit worse than −0.5%, including a sale you make at a loss; a win or a scratch
+resets the count.
+
+### Why a fixed loss
+
+With a fixed amount per trade, a calm stock with a 3% stop gets roughly a $8,300 position and a
+volatile one with a 5% stop about $5,000. Both lose $250 if stopped. No single stock can hurt more
+than another, and the journal's R-multiples mean the same thing on every row.
 
 ### Why two allocation bars
 
-Every slot is $5,000, so a book can look balanced by money and still get half its day-to-day
-movement from its Volatile names: a Volatile stock moves about three times as much in a day as
-a Steady one. The dashboard shows **share of money** and **share of daily swing**
-(value × daily range) side by side. The bucket caps block on position counts; the swing guide
-only warns.
+A Volatile stock moves about three times as much in a day as a Steady one. The dashboard shows
+**share of money** and **share of daily swing** (value × daily range) side by side; the second is
+the one that shows concentration. The bucket and sector caps block on position counts; the swing
+guide only warns.
 
 ---
 
@@ -56,8 +72,8 @@ only warns.
 | Singapore | `D05:SG` | SGD | 100 | |
 | Tokyo | `7203:JP` | JPY | 100 | |
 
-- **Board lots.** Sizes round down to whole lots, so a position never exceeds its slot. A stock
-  whose single lot costs more than $5,000 is blocked for that reason (the check says so).
+- **Board lots.** Sizes round to whole lots. When one lot would lose more than 20% over the fixed
+  loss (a pricey Tokyo or Hong Kong stock), the check blocks it and says why.
 - **Tick sizes.** Stops round **up** (toward the price, so a stop-out never loses more than the
   stop %), targets round **down** (so they stay reachable), on the exchange's own grid from
   IBKR's market rules.
@@ -107,6 +123,12 @@ be confirmed against a real paper account:
   same `guardian.client_id` every time.
 - [ ] **Exchange rates** come through (the check shows "Approximate exchange rate" when it falls
   back to the table in the config).
+- [ ] **Market weather** shows a reading for all five markets. Each proxy (`ISF:LN`, `2800:HK`,
+  `ES3:SG`, `1306:JP`) must resolve at IBKR with daily history; swap any that doesn't in
+  `trading.weather`.
+- [ ] **Sectors** come from IBKR's industry category. Check they group the way you think of your
+  themes, and override any with the API (`POST /api/sector`).
+- [ ] **An add** on paper moves the whole position's stop up, as the activity feed says.
 
 ---
 
@@ -143,22 +165,51 @@ stops up) and the repair of missing stops, so run it on an always-on machine.
 
 ---
 
+## Market weather
+
+The analysis side's regime model, run once a day per market on an index proxy (`trading.weather`
+in the config): SPY with VIX, equal-weight breadth and the VIX curve for the US; `ISF:LN`,
+`2800:HK`, `ES3:SG` and `1306:JP` (trend and drawdown) for the others. A new buy's fixed loss is
+multiplied by its market's reading: Risk-On, Constructive and Neutral × 1, Defensive × 0.5,
+Risk-Off × 0. Open positions are never touched by the weather; their stops do that job.
+
+## Earnings dates
+
+IBKR's API has no free earnings calendar, so dates come from you (the date box on the watchlist,
+or `trade earnings`) and, if you set `FMP_API_KEY`, from Financial Modeling Prep's free tier.
+A date you set is never overwritten while it is in the future. Positions with a report within two
+days get an alert: a stop can't protect against the gap.
+
+## The journal
+
+Every trade is kept with its setup tag (chosen when you buy), your note, its result in dollars
+and in **R** (a full stop-out is −1R), how many days it was held, and its best and worst price
+along the way. The dashboard grades the results by stock type and by setup: win rate, average win
+and loss in R, and **expectancy**, the average R per trade. Above zero is an edge; with 30 or more
+trades in a group it starts to mean something. `GET /api/journal.csv` downloads it all.
+
 ## Dashboard
 
-`trade run` serves it on `127.0.0.1:8765`. Panels:
+`trade run` serves it on `127.0.0.1:8765`. From the top:
 
-- **header:** mode (paper, LIVE, simulated), orders on or dry run, and how many positions have a stop
-- **the book:** slots, invested, open P/L, what you would lose if every stop hit
-- **bucket mix:** money and daily swing per type, slots left per bucket
-- **open positions:** entry, last, stop (and whether it is at entry or trailing), target, progress, protection
-- **check a new trade:** sizing, stop, target, every rule with its result, then **Send buy order →
-  Confirm buy**
-- **watchlist:** add or remove tickers, confirm types, see what is locked
-- **two-strike tracker** and **activity** (every order and alert)
+- **header:** mode (paper, LIVE, simulated), orders on or dry run, how many positions have a stop,
+  and whether buys are paused
+- **the book:** positions, invested vs the limit, open P/L, what every stop hitting would lose
+- **market weather** per market, and **circuit breakers** with Pause / Resume / Kill switch
+- **bucket mix:** money and daily swing per type, positions left per bucket, positions per sector
+- **open positions:** stop (at entry, trailing, and what it risks), target, progress, flags
+  (time stop, earnings, strikes, added) and **Add** / **Sell** buttons
+- **check a new trade:** sizing, stop, target and every rule with its result, a setup tag and a
+  note, then **Send → Confirm**
+- **two-strike tracker** with **Unlock**, and **activity** (every order and alert)
+- **journal:** expectancy for all trades, the last 7 and 30 days, by type and setup, and every
+  closed trade
+- **watchlist:** add or remove tickers, confirm types, set earnings dates, see what is locked
+- **settings:** time-stop weeks and gain, earnings window, fixed loss
 
 **From your phone:** don't expose the port. Put it behind the Caddy proxy in `deploy/` (TLS and a
 password), and also set `FIREPLANNER_DASH_TOKEN`, then open `https://your-host/?token=…` once.
-With a token set, every API call needs it.
+With a token set, every API call needs it, and the page carries no data until it has it.
 
 **Watchlist from IBKR:** the TWS API has no watchlist access, so there's no live sync. Export a
 watchlist from TWS (right-click → *Export page content*) and `trade watch import` the file, or
@@ -167,10 +218,12 @@ add tickers on the dashboard. `trading.watchlist` in the config seeds it on firs
 ## Alerts
 
 With `TELEGRAM_BOT_TOKEN` and `TELEGRAM_CHAT_ID` set (see the README's Telegram section), you
-get a message for new positions, exits, stop moves to entry and into trailing, and every warning
-or critical event, labelled *Swing Desk*. `--no-notify` turns them off.
+get a message for new positions, adds, exits, stop moves to entry and into trailing, time stops,
+earnings within two days, the circuit breakers, and every warning or critical event, labelled
+*Swing Desk*. `--no-notify` turns them off.
 
 ## Files
 
-`data/trading/journal.sqlite` holds every trade, exit, alert, stock-type confirmation and the
-watchlist. It is gitignored. Back it up: the two-strike rule depends on it.
+`data/trading/journal.sqlite` holds every trade, exit, alert, stock-type confirmation, unlock,
+earnings date, setting and the watchlist. It is gitignored. Back it up: the two-strike rule and
+the circuit breakers depend on it. An older journal is upgraded in place when opened.

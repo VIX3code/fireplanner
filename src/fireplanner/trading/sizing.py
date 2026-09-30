@@ -1,13 +1,18 @@
 """Turn "buy this stock" into a whole-lot order with its stop and target.
 
-One slot is ``rules.slot_usd`` in the base currency. It is converted to the
-listing currency, divided by the limit price, and rounded **down** to whole
-board lots, so a position never exceeds its slot. Prices are snapped to the
-exchange's tick grid in the direction that keeps the promise:
+**The loss is fixed; the size follows.** The stop is set first (the tighter of
+5% or 2.5 × the daily range), then the share count is whatever makes a
+stop-out cost ``risk_per_trade_usd``. A calm stock with a 3% stop gets a bigger
+position than a volatile one with a 5% stop; both lose the same if stopped.
 
-* the stop rounds **up**, toward the price, so a stop-out never loses more
-  than the stop percentage;
-* the target rounds **down**, toward the price, so it stays reachable.
+Share and lot counts round **up** by default, so the position is never smaller
+than the rule asks. Rounding up a large lot (Tokyo, Hong Kong) can overshoot a
+lot, so when it would add more than ``max_round_up_overshoot`` to the loss the
+count rounds down instead. Every position is then capped at
+``max_position_usd``.
+
+Prices snap to the exchange's tick grid in the direction that keeps the
+promise: the stop rounds **up** (toward the price), the target **down**.
 """
 
 from __future__ import annotations
@@ -41,9 +46,14 @@ class EntryPlan:
     target: float
     target_pct: float
     target_qty: int
+    #: The fixed loss this trade was sized for (after any weather cut).
+    risk_budget_usd: float
+    #: What a stop-out actually costs after rounding and caps.
     max_loss_usd: float
     target_gain_usd: float
     atr: float | None
+    #: What set the size: "fixed loss", "rounded down", or "max position".
+    sized_by: str = "fixed loss"
     #: Why the order cannot be placed, or None.
     problem: str | None = None
 
@@ -89,29 +99,48 @@ def plan_entry(
     rules: TradingRules,
     usd_per_unit: float,
     limit: float | None = None,
+    risk_usd: float | None = None,
 ) -> EntryPlan:
-    """Size a new position. Never raises for a business reason: sets ``problem``."""
+    """Size a new position (or an add). Never raises for a business reason: sets ``problem``."""
     bucket = rules.bucket(bucket_id)
+    budget = rules.risk_per_trade_usd if risk_usd is None else risk_usd
     if limit is None:
         limit = inst.round(last * (1 + rules.entry_limit_buffer), "up")
-    lot = inst.lot_size
-    problem = None
-
-    if lot <= 0:
-        qty = 0
-        problem = (f"The board lot for {inst.key} is unknown. Hong Kong lots differ per stock: "
-                   f"add it to the watchlist with its lot size.")
-    else:
-        slot_local = rules.slot_usd / usd_per_unit
-        per_share = inst.value(1, limit)
-        qty = math.floor(slot_local / per_share / lot) * lot if per_share > 0 else 0
-        if qty == 0:
-            one_lot = inst.value(lot, limit) * usd_per_unit
-            problem = (f"One lot ({lot} shares) costs about ${one_lot:,.0f}, "
-                       f"more than the ${rules.slot_usd:,.0f} slot.")
-
     stop = initial_stop(limit, atr, rules, inst)
     target = target_price(limit, bucket.target, inst)
+    lot = inst.lot_size
+    risk_per_share = inst.value(1, limit - stop) * usd_per_unit
+    per_share = inst.value(1, limit) * usd_per_unit
+    qty, sized_by, problem = 0, "fixed loss", None
+
+    if lot <= 0:
+        problem = (f"The board lot for {inst.key} is unknown. Hong Kong lots differ per stock: "
+                   f"add it to the watchlist with its lot size.")
+    elif budget <= 0:
+        problem = "Market weather is Risk-Off: new buys are paused."
+    elif risk_per_share <= 0:
+        problem = "The stop is not below the entry price."
+    else:
+        lots = budget / risk_per_share / lot
+        down, up = math.floor(lots + 1e-9) * lot, math.ceil(lots - 1e-9) * lot
+        qty = down
+        if rules.round_up:
+            if up * risk_per_share <= budget * (1 + rules.max_round_up_overshoot):
+                qty = up
+            elif down > 0:
+                sized_by = "rounded down"
+        cap = math.floor(rules.max_position_usd / per_share / lot + 1e-9) * lot
+        if qty > cap:
+            qty, sized_by = cap, "max position"
+        if qty == 0:
+            one_lot_risk = lot * risk_per_share
+            if cap == 0:
+                problem = (f"One lot ({lot} shares) costs about ${lot * per_share:,.0f}, more than the "
+                           f"${rules.max_position_usd:,.0f} position cap.")
+            else:
+                problem = (f"One lot ({lot} shares) would lose about ${one_lot_risk:,.0f} at the stop, more than "
+                           f"{rules.max_round_up_overshoot:.0%} over the ${budget:,.0f} fixed loss.")
+
     cost_local = inst.value(qty, limit)
     return EntryPlan(
         key=inst.key, symbol=inst.symbol, market=inst.market, currency=inst.currency,
@@ -120,7 +149,7 @@ def plan_entry(
         stop=stop, stop_pct=1 - stop / limit, stop_basis=stop_basis(atr, rules),
         target=target, target_pct=target / limit - 1,
         target_qty=target_qty(qty, lot, rules) if qty else 0,
-        max_loss_usd=inst.value(qty, limit - stop) * usd_per_unit,
+        risk_budget_usd=budget, max_loss_usd=qty * risk_per_share,
         target_gain_usd=inst.value(qty, target - limit) * usd_per_unit,
-        atr=atr, problem=problem,
+        atr=atr, sized_by=sized_by, problem=problem,
     )

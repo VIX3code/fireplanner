@@ -2,19 +2,23 @@
 
 The rules are the user's, written down as numbers:
 
-* **$5,000 per trade, at most 20 open.** A slot is a fixed amount in USD,
-  converted to the stock's own currency at the day's rate.
-* **Stop = the tighter of 5% or 2.5 × the average daily range.** A calm stock
-  gets a tighter stop than 5%; a volatile one is capped at 5%. Either way a
-  stop-out costs at most about $250 before gaps.
-* **Three stock types, each with its own target and cap on open positions.**
-  Steady (+10%), Core (+15%), Volatile (+20%). The type is suggested from the
-  average daily range and confirmed by the user.
-* **At the target, sell half and trail the rest.** The stop moves to the entry
-  price once the stock has been 5% above entry, then trails 3 ATRs under the
-  highest price since entry. It never moves down.
-* **Two strikes per stock.** After a stop-out you may re-enter once. A second
-  stop-out in a row locks the stock for 10 trading days.
+* **A fixed loss per trade.** Every position is sized so that its stop costs
+  the same ``risk_per_trade_usd`` (before gaps), whatever the stock. A tight
+  stop means a bigger position, capped at ``max_position_usd``; the whole book
+  is capped at ``max_invested_usd`` and ``max_slots`` positions.
+* **Stop = the tighter of 5% or 2.5 × the average daily range.**
+* **Three stock types**, each with its own target and cap on open positions:
+  Steady (+10%), Core (+15%), Volatile (+20%). Suggested from the daily range,
+  confirmed by the user.
+* **At the target, sell half and trail the rest.** The stop moves to entry at
+  +5%, then trails 3 ATRs under the high. It never moves down.
+* **Two strikes per stock.** After a stop-out you may re-enter once; a second in
+  a row locks the stock until you unlock it (or for ``lockout_days``).
+* **One add to a winner**, once its stop is at entry or better, sized for the
+  same fixed loss; the combined stop moves up so the whole position still risks
+  about one fixed loss.
+* **Guards on the book**: a time stop, market weather, sector and total-risk
+  caps, and circuit breakers that pause new buys.
 
 Every fraction here is a fraction (0.05), never a percentage (5). ATR arrives
 from the indicator layer as a percentage and is divided by 100 at the boundary.
@@ -25,7 +29,8 @@ from __future__ import annotations
 from dataclasses import dataclass, field, fields, replace
 from pathlib import Path
 
-__all__ = ["Bucket", "TradingRules", "DEFAULT_BUCKETS", "BUCKET_IDS", "load_rules", "load_settings"]
+__all__ = ["Bucket", "TradingRules", "DEFAULT_BUCKETS", "BUCKET_IDS", "ADJUSTABLE", "load_rules",
+           "load_settings", "with_overrides"]
 
 BUCKET_IDS = ("steady", "core", "volatile")
 
@@ -45,20 +50,34 @@ class Bucket:
 
 
 DEFAULT_BUCKETS: tuple[Bucket, ...] = (
-    Bucket("steady", "Steady", 0.020, 0.10, 20),
+    Bucket("steady", "Steady", 0.020, 0.10, 10),
     Bucket("core", "Core", 0.035, 0.15, 10),
-    Bucket("volatile", "Volatile", None, 0.20, 5),
+    Bucket("volatile", "Volatile", None, 0.20, 7),
 )
+
+#: Market-weather label -> multiplier on the fixed loss for a new trade.
+DEFAULT_WEATHER_SIZING = {"Risk-On": 1.0, "Constructive": 1.0, "Neutral": 1.0, "Defensive": 0.5, "Risk-Off": 0.0}
 
 
 @dataclass(frozen=True)
 class TradingRules:
     """The account's trading policy. Defaults are the agreed starting rules."""
 
-    #: Size of one position, in the base currency.
-    slot_usd: float = 5000.0
+    # -- sizing --------------------------------------------------------------
+    #: What a stop-out costs, in the base currency, on every trade (before gaps).
+    risk_per_trade_usd: float = 250.0
+    #: No single position larger than this, however tight its stop.
+    max_position_usd: float = 10_000.0
+    #: Total the open book may hold at cost.
+    max_invested_usd: float = 100_000.0
     #: Maximum open positions across every bucket.
     max_slots: int = 20
+    #: Round the share / lot count up (True) or down (False).
+    round_up: bool = True
+    #: ...but round down instead if rounding up would add more than this to the fixed loss.
+    max_round_up_overshoot: float = 0.20
+
+    # -- stops and targets ---------------------------------------------------------
     #: Widest allowed initial stop, as a fraction below entry.
     max_stop_pct: float = 0.05
     #: Volatility stop distance in ATRs; the stop is the tighter of this and max_stop_pct.
@@ -69,21 +88,61 @@ class TradingRules:
     atr_trail_mult: float = 3.0
     #: Sell half at the target and trail the rest (False: sell everything).
     take_half_at_target: bool = True
-    #: Consecutive losing exits allowed before a stock is locked.
-    max_strikes: int = 2
-    #: Trading days a stock stays locked after the last allowed strike.
-    lockout_days: int = 10
-    #: An exit worse than this loss counts as a strike. Keeps a scratch at
-    #: breakeven (commissions only) from counting as a stop-out.
-    strike_loss_pct: float = 0.005
-    #: Warn when Volatile would drive more than this share of the daily swing.
-    swing_guide: float = 0.50
-    #: Block a second position in a stock that is already held.
-    one_position_per_stock: bool = True
-    #: A dashboard buy is a limit order this far above the last price.
-    entry_limit_buffer: float = 0.005
     #: Let a stop trigger outside regular trading hours.
     outside_rth: bool = False
+
+    # -- two strikes -----------------------------------------------------------
+    #: Consecutive losing exits allowed before a stock is locked.
+    max_strikes: int = 2
+    #: Trading days a lock lasts. None: until you unlock it yourself.
+    lockout_days: int | None = None
+    #: An exit worse than this loss counts as a strike (a scratch at entry does not).
+    strike_loss_pct: float = 0.005
+
+    # -- adding to a winner -------------------------------------------------------
+    allow_add: bool = True
+    #: Adds allowed per position ("a second $5k").
+    max_adds: int = 1
+
+    # -- time stop -------------------------------------------------------------
+    #: Flag a position that has gone this many weeks without reaching time_stop_min_gain.
+    time_stop_weeks: float = 4.0
+    time_stop_min_gain: float = 0.05
+    #: "alert" (flag it, you sell from the dashboard) or "sell" (sell it automatically).
+    time_stop_action: str = "alert"
+
+    # -- earnings ---------------------------------------------------------------
+    #: Warn when earnings fall within this many calendar days.
+    earnings_warn_days: int = 7
+    #: Block new buys inside that window (False: warn only).
+    earnings_block: bool = False
+
+    # -- market weather -------------------------------------------------------------
+    #: Weather label -> multiplier on the fixed loss. 0 blocks new buys.
+    weather_sizing: dict = field(default_factory=lambda: dict(DEFAULT_WEATHER_SIZING))
+
+    # -- concentration --------------------------------------------------------------
+    #: Most open positions in one sector (IBKR's industry category).
+    max_per_sector: int = 4
+    #: Most the whole book may lose if every stop hits at once.
+    max_open_risk_usd: float = 5_000.0
+    #: Warn when Volatile would drive more than this share of the daily swing.
+    swing_guide: float = 0.50
+    #: Block a second position in a stock already held (adds go through max_adds).
+    one_position_per_stock: bool = True
+
+    # -- circuit breakers -------------------------------------------------------------
+    #: Realized losses that pause new buys for the rest of the day / week.
+    daily_loss_limit_usd: float = 750.0
+    weekly_loss_limit_usd: float = 1_500.0
+    #: Stop-outs in a row, across all stocks, that pause new buys until you resume.
+    max_consecutive_losses: int = 3
+    #: Buy orders the dashboard may send in one day.
+    max_entries_per_day: int = 10
+
+    # -- plumbing ------------------------------------------------------------------
+    #: A dashboard buy is a limit order this far above the last price.
+    entry_limit_buffer: float = 0.005
     #: Currency every total is reported in.
     base_currency: str = "USD"
     #: Used only when the broker cannot supply a live rate. USD per 1 unit.
@@ -118,24 +177,39 @@ class TradingRules:
             return self.max_stop_pct
         return min(self.max_stop_pct, self.atr_stop_mult * atr)
 
+    def weather_multiplier(self, label: str | None) -> float:
+        if not label:
+            return 1.0
+        return float(self.weather_sizing.get(label, 1.0))
+
     def as_dict(self) -> dict:
-        return {
-            "slot_usd": self.slot_usd,
-            "max_slots": self.max_slots,
-            "max_stop_pct": self.max_stop_pct,
-            "atr_stop_mult": self.atr_stop_mult,
-            "breakeven_at": self.breakeven_at,
-            "atr_trail_mult": self.atr_trail_mult,
-            "take_half_at_target": self.take_half_at_target,
-            "max_strikes": self.max_strikes,
-            "lockout_days": self.lockout_days,
-            "swing_guide": self.swing_guide,
-            "base_currency": self.base_currency,
-            "buckets": [
-                {"id": b.id, "name": b.name, "max_atr": b.max_atr, "target": b.target, "cap": b.cap}
-                for b in self.buckets
-            ],
-        }
+        d = {f.name: getattr(self, f.name) for f in fields(self) if f.name not in ("buckets", "fx_fallback")}
+        d["buckets"] = [
+            {"id": b.id, "name": b.name, "max_atr": b.max_atr, "target": b.target, "cap": b.cap}
+            for b in self.buckets
+        ]
+        return d
+
+
+#: Rules the dashboard may change at run time, with their allowed range.
+ADJUSTABLE = {
+    "time_stop_weeks": (1.0, 26.0),
+    "time_stop_min_gain": (0.0, 0.5),
+    "earnings_warn_days": (0, 60),
+    "risk_per_trade_usd": (25.0, 5_000.0),
+}
+
+
+def with_overrides(rules: TradingRules, overrides: dict) -> TradingRules:
+    """Apply dashboard-set values, clamped to their allowed range."""
+    clean = {}
+    for key, value in overrides.items():
+        if key not in ADJUSTABLE:
+            continue
+        lo, hi = ADJUSTABLE[key]
+        v = type(lo)(value)
+        clean[key] = min(hi, max(lo, v))
+    return replace(rules, **clean) if clean else rules
 
 
 def load_rules(path: str | Path | None = "config/config.yaml") -> TradingRules:
@@ -154,7 +228,7 @@ def load_rules(path: str | Path | None = "config/config.yaml") -> TradingRules:
     known = {f.name for f in fields(TradingRules)}
     raw = dict(raw)
     # Operational settings live in the same section but are not rules.
-    for key in ("enabled", "allow_live", "journal", "dashboard", "guardian", "watchlist", "lot_sizes"):
+    for key in DEFAULT_SETTINGS:
         raw.pop(key, None)
 
     unknown = set(raw) - known
@@ -180,6 +254,10 @@ def load_rules(path: str | Path | None = "config/config.yaml") -> TradingRules:
 
     if "fx_fallback" in raw:
         raw["fx_fallback"] = {**rules.fx_fallback, **raw["fx_fallback"]}
+    if "weather_sizing" in raw:
+        raw["weather_sizing"] = {**rules.weather_sizing, **raw["weather_sizing"]}
+    if raw.get("time_stop_action", "alert") not in ("alert", "sell"):
+        raise ValueError("trading.time_stop_action must be 'alert' or 'sell'")
     return replace(rules, **raw)
 
 
@@ -192,6 +270,12 @@ DEFAULT_SETTINGS = {
     "dashboard": {"host": "127.0.0.1", "port": 8765},
     "watchlist": [],
     "lot_sizes": {},
+    # Index proxy per market for the market-weather check. US also uses VIX,
+    # RSP (breadth) and VIX3M; the others use trend and drawdown of the proxy.
+    "weather": {"US": "SPY", "LSE": "ISF:LN", "SEHK": "2800:HK", "SGX": "ES3:SG", "TSEJ": "1306:JP"},
+    # Earnings dates: IBKR has no free calendar, so dates come from you (dashboard
+    # or `trade earnings`) and, if FMP_API_KEY is set, Financial Modeling Prep.
+    "earnings": {"provider": "manual"},
 }
 
 

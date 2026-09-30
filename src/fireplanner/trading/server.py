@@ -5,11 +5,19 @@ Standard library only. It serves one page and a JSON API:
 ==========================  ==============================================
 ``GET  /``                  the dashboard
 ``GET  /api/state``         the latest snapshot (positions, buckets, ...)
+``GET  /api/journal.csv``   every closed trade, for a spreadsheet
 ``POST /api/check``         run the pre-trade check for a symbol
 ``POST /api/enter``         send a buy (re-checked on the loop first)
-``POST /api/watch``         add a ticker to the watchlist
-``POST /api/unwatch``       remove one
+``POST /api/add``           add to a winner
+``POST /api/exit``          sell a whole position now
+``POST /api/unlock``        unlock a stock after two strikes
+``POST /api/pause``         pause new buys; ``/api/resume``; ``/api/kill``
+``POST /api/watch``         add a ticker to the watchlist; ``/api/unwatch``
 ``POST /api/bucket``        confirm a stock's type
+``POST /api/earnings``      set or clear an earnings date
+``POST /api/sector``        group a stock under a sector or theme
+``POST /api/settings``      change an adjustable rule (time stop weeks...)
+``POST /api/note``          set a trade's setup tag and note
 ==========================  ==============================================
 
 It binds to 127.0.0.1 by default. To reach it from your phone, put it behind
@@ -83,6 +91,10 @@ def make_server(service, host: str = "127.0.0.1", port: int = 8765, token: str =
                 if not self._authorised():
                     return self._json(401, {"error": "token required"})
                 self._json(200, service.snapshot())
+            elif path == "/api/journal.csv":
+                if not self._authorised():
+                    return self._json(401, {"error": "token required"})
+                self._send(200, journal_csv(service.journal).encode(), "text/csv; charset=utf-8")
             elif path == "/favicon.ico":
                 self.send_response(204)
                 self.end_headers()
@@ -102,17 +114,30 @@ def make_server(service, host: str = "127.0.0.1", port: int = 8765, token: str =
             except (ValueError, json.JSONDecodeError):
                 return self._json(400, {"error": "invalid JSON"})
             routes = {
-                "/api/check": ("check", ("symbol", "bucket", "limit")),
-                "/api/enter": ("enter", ("symbol", "bucket", "limit", "expect_qty")),
+                "/api/check": ("check", ("symbol", "bucket", "limit", "add")),
+                "/api/enter": ("enter", ("symbol", "bucket", "limit", "expect_qty", "setup", "note")),
+                "/api/add": ("add_to", ("key", "limit", "expect_qty")),
+                "/api/exit": ("exit_position", ("key",)),
+                "/api/unlock": ("unlock", ("key",)),
+                "/api/pause": ("pause", ("note",)),
+                "/api/resume": ("resume", ()),
+                "/api/kill": ("kill", ()),
                 "/api/watch": ("watch_add", ("symbol", "lot_size", "note")),
                 "/api/unwatch": ("watch_remove", ("key",)),
                 "/api/bucket": ("set_bucket", ("key", "bucket")),
+                "/api/earnings": ("set_earnings", ("key", "date")),
+                "/api/sector": ("set_sector", ("key", "sector")),
+                "/api/settings": ("set_settings", ("time_stop_weeks", "time_stop_min_gain",
+                                                   "earnings_warn_days", "risk_per_trade_usd")),
+                "/api/note": ("set_trade_note", ("trade_id", "setup", "note")),
             }
             route = routes.get(self.path.split("?", 1)[0])
             if route is None:
                 return self._json(404, {"error": "not found"})
             name, allowed = route
             kwargs = {k: body[k] for k in allowed if body.get(k) not in (None, "")}
+            if name in ("set_earnings", "set_trade_note"):   # an empty value clears
+                kwargs.update({k: body[k] for k in allowed if k in body and body[k] in ("", None) and k != "key"})
             try:
                 result = service.submit(name, **kwargs).result(timeout=timeout)
             except TimeoutError:
@@ -124,6 +149,25 @@ def make_server(service, host: str = "127.0.0.1", port: int = 8765, token: str =
             self._json(200, result)
 
     return ThreadingHTTPServer((host, port), Handler)
+
+
+def journal_csv(journal) -> str:
+    import csv
+    import io
+
+    from .stats import trade_r
+
+    buf = io.StringIO()
+    w = csv.writer(buf)
+    w.writerow(["id", "stock", "type", "setup", "opened", "closed", "days", "entry", "result_pct",
+                "result_usd", "r_multiple", "stop_out", "adds", "best_pct", "worst_pct", "note"])
+    for t in journal.closed_trades():
+        r = trade_r(t)
+        w.writerow([t.id, t.key, t.bucket, t.setup, t.opened_at, t.closed_at, t.days_held, round(t.entry, 6),
+                    round(t.realized_pct or 0, 5), round(t.realized_usd or 0, 2), "" if r is None else round(r, 3),
+                    t.strike, t.adds, round(t.high_water / t.entry - 1, 5),
+                    round((t.low_water or t.entry) / t.entry - 1, 5), t.note])
+    return buf.getvalue()
 
 
 def serve(service, host: str = "127.0.0.1", port: int = 8765, token: str = "") -> ThreadingHTTPServer:

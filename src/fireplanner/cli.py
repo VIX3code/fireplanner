@@ -319,7 +319,7 @@ def _trade_service(args):
     service = TradingService(broker, journal, rules,
                              orders_enabled=bool(settings["enabled"]) and not args.dry_run,
                              notifier=notifier, seed_watchlist=settings["watchlist"],
-                             lot_sizes=settings["lot_sizes"])
+                             lot_sizes=settings["lot_sizes"], weather_proxies=settings["weather"])
     return service, settings
 
 
@@ -333,6 +333,11 @@ def _print_book(state: dict) -> None:
     for b in state["buckets"]:
         print(f"    {b['name']:<9} {b['n']:>2}/{b['cap']:<2}  money {b['money_share'] * 100:5.1f}%   "
               f"daily swing {b['swing_share'] * 100:5.1f}%")
+    if state.get("weather"):
+        print("\n    weather  " + "  ".join(f"{m}: {w['label'] or '—'}" for m, w in state["weather"].items()))
+    br = state.get("breaker") or {}
+    if br.get("paused"):
+        print("    BUYS PAUSED: " + " ".join(br["reasons"]))
     if state["positions"]:
         print()
         print(f"    {'stock':<12}{'type':<9}{'qty':>6}{'entry':>11}{'last':>11}{'stop':>11}{'target':>11}  state")
@@ -393,7 +398,8 @@ def cmd_trade_check(args) -> int:
     p, inst = res["plan"], res["instrument"]
     d = inst["decimals"]
     print(f"\n  {inst['key']}  {inst['name']}  ->  {res['verdict'].upper()}")
-    print(f"  buy {p['qty']} @ {p['limit']:,.{d}f} {inst['currency']} (~${p['cost_usd']:,.0f}) · "
+    print(f"  buy {p['qty']} @ {p['limit']:,.{d}f} {inst['currency']} (~${p['cost_usd']:,.0f}, "
+          f"loses ${p['max_loss_usd']:,.0f} at the stop) · "
           f"stop {p['stop']:,.{d}f} (-{p['stop_pct'] * 100:.1f}%, {p['stop_basis']}) · "
           f"target {p['target']:,.{d}f} (+{p['target_pct'] * 100:.0f}%) on {p['target_qty']}")
     for c in res["checks"]:
@@ -451,6 +457,30 @@ def cmd_trade_bucket(args) -> int:
     journal.confirm_bucket(f"{sym}:{mkt}", b.id)
     print(f"  {sym}:{mkt} confirmed as {b.name} (target +{b.target:.0%}, cap {b.cap}). "
           f"A running guardian updates an open position's target on its next cycle.")
+    return 0
+
+
+def cmd_trade_unlock(args) -> int:
+    from .trading import Journal, load_settings, parse_symbol
+
+    journal = Journal(args.journal or load_settings(args.config)["journal"])
+    sym, mkt = parse_symbol(args.symbol)
+    journal.unlock(f"{sym}:{mkt}")
+    print(f"  {sym}:{mkt} unlocked: two tries again.")
+    return 0
+
+
+def cmd_trade_earnings(args) -> int:
+    from .trading import Journal, load_settings, parse_symbol
+    from .trading.earnings import parse_date
+
+    journal = Journal(args.journal or load_settings(args.config)["journal"])
+    if args.symbol:
+        sym, mkt = parse_symbol(args.symbol)
+        d = None if args.date in (None, "", "clear") else parse_date(args.date)
+        journal.set_earnings(f"{sym}:{mkt}", d, source="manual")
+    for key, e in sorted(journal.earnings().items(), key=lambda kv: (kv[1]["date"] is None, kv[1]["date"] or "")):
+        print(f"    {key:<14} {e['date'] or '—'}  ({e['source']})")
     return 0
 
 
@@ -571,6 +601,13 @@ def main(argv=None) -> int:
     p.add_argument("action", choices=["add", "rm", "import", "list"])
     p.add_argument("items", nargs="*", help="tickers (add/rm) or files (import)")
     p.add_argument("--lot", type=int, default=None, help="board lot, for Hong Kong listings")
+
+    p = trade_parser("unlock", "unlock a stock after two stop-outs", cmd_trade_unlock)
+    p.add_argument("symbol")
+
+    p = trade_parser("earnings", "set, clear or list earnings dates", cmd_trade_earnings)
+    p.add_argument("symbol", nargs="?")
+    p.add_argument("date", nargs="?", help="YYYY-MM-DD, or 'clear'")
 
     p = trade_parser("bucket", "confirm a stock's type", cmd_trade_bucket)
     p.add_argument("symbol")

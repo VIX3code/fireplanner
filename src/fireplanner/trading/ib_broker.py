@@ -163,7 +163,8 @@ class IBBroker:
         inst = Instrument(symbol=symbol, market=market, con_id=int(c.conId), currency=c.currency or m.currency,
                           lot_size=int(lot), price_magnifier=float(magnifier),
                           increments=self._increments(details, c.exchange or m.exchange),
-                          description=details.longName or "", inverse=inverse, leverage=lev)
+                          description=details.longName or "", inverse=inverse, leverage=lev,
+                          sector=(getattr(details, "category", "") or getattr(details, "industry", "") or ""))
         self._contracts[inst.con_id] = c
         self._inst[inst.con_id] = inst
         self._by_key[inst.key] = inst
@@ -288,6 +289,35 @@ class IBBroker:
             value = None
         self._atr[inst.con_id] = (today, value)
         return value
+
+    _INDICES = {"VIX": "CBOE", "VIX3M": "CBOE", "VIX9D": "CBOE", "SPX": "CBOE"}
+
+    def bars(self, symbol_text: str, days: int = 520):
+        """Daily bars for the market-weather proxies, cached for the day."""
+        from ib_async import Index, util
+
+        from ..data.base import drop_incomplete_last_bar, normalize_bars
+        from .markets import parse_symbol
+
+        key = symbol_text.upper()
+        hit = getattr(self, "_bars_cache", {}).get(key)
+        if hit and hit[0] == date.today():
+            return hit[1]
+        ib = self.connect()
+        if key in self._INDICES:
+            contract = Index(key, self._INDICES[key], "USD")
+            ib.qualifyContracts(contract)
+        else:
+            sym, mkt = parse_symbol(key)
+            contract = self._contracts[self.instrument(sym, mkt).con_id]
+        years = max(1, round(days / 252))
+        raw = ib.reqHistoricalData(contract, endDateTime="", durationStr=f"{years} Y", barSizeSetting="1 day",
+                                   whatToShow="TRADES", useRTH=True, formatDate=1)
+        if not raw:
+            raise LookupError(f"IBKR returned no bars for {symbol_text}")
+        frame = drop_incomplete_last_bar(normalize_bars(util.df(raw))).tail(days)
+        self._bars_cache = {**getattr(self, "_bars_cache", {}), key: (date.today(), frame)}
+        return frame
 
     def usd_per_unit(self, currency: str) -> tuple[float, bool]:
         currency = currency.upper()

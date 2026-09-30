@@ -111,6 +111,7 @@ p{margin:0}
 .two{display:grid;grid-template-columns:minmax(0,1.15fr) minmax(0,1fr);gap:16px;align-items:start}
 @media (max-width:900px){.two{grid-template-columns:1fr}}
 .stackcol{display:grid;gap:16px;min-width:0}
+.two > *,.row2 > *{min-width:0}
 .filters{display:flex;gap:6px;flex-wrap:wrap}
 button{font:inherit}
 .fbtn{font-size:13px;padding:4px 12px;border-radius:999px;border:1px solid var(--line);background:transparent;color:var(--ink-2);cursor:pointer;display:inline-flex;align-items:center;gap:6px}
@@ -134,14 +135,14 @@ th.center,td.center{text-align:center}
 .small{display:block;font-size:11.5px;color:var(--muted);font-weight:400}
 .ok-small{display:block;font-size:11.5px;color:var(--good-ink);font-weight:500}
 .empty-row{color:var(--muted);text-align:center!important;padding:22px}
-.track{position:relative;width:140px;height:16px;margin-left:auto}
+.track{position:relative;width:110px;height:16px;margin-left:auto}
 .track .rail{position:absolute;left:0;right:0;top:7px;height:2px;background:var(--line);border-radius:2px}
 .track .entry{position:absolute;top:3px;width:2px;height:10px;margin-left:-1px;background:var(--axis);border-radius:1px}
 .track .fill{position:absolute;top:7px;height:2px;border-radius:2px}
 .track .fill.up{background:var(--up)} .track .fill.down{background:var(--down)}
 .track .dot{position:absolute;top:3px;width:10px;height:10px;border-radius:50%;margin-left:-5px;box-shadow:0 0 0 2px var(--surface)}
 .track .dot.up{background:var(--up)} .track .dot.down{background:var(--down)}
-.track-ends{display:flex;justify-content:space-between;width:140px;margin-left:auto;font-size:10.5px;color:var(--muted)}
+.track-ends{display:flex;justify-content:space-between;width:110px;margin-left:auto;font-size:10.5px;color:var(--muted)}
 .form{display:grid;grid-template-columns:minmax(0,1.4fr) minmax(0,1fr) minmax(0,.9fr) auto;gap:8px;margin-top:12px;align-items:end}
 @media (max-width:560px){.form{grid-template-columns:1fr 1fr}}
 .field{display:grid;gap:5px;min-width:0}
@@ -184,6 +185,34 @@ input,select{font:inherit;font-size:14px;color:var(--ink);background:var(--inset
 .tip .n{display:flex;align-items:center;gap:6px;color:var(--ink-2)}
 .tip .k{width:12px;height:3px;border-radius:2px}
 .tip .x{color:var(--muted);margin-top:2px}
+
+/* weather + breakers */
+.row2{display:grid;grid-template-columns:minmax(0,1.6fr) minmax(0,1fr);gap:16px;align-items:start}
+@media (max-width:900px){.row2{grid-template-columns:1fr}}
+.wx{display:grid;grid-template-columns:repeat(auto-fit,minmax(118px,1fr));gap:10px;margin-top:12px}
+td.flags{white-space:normal;min-width:120px;max-width:170px}
+.wxc{border:1px solid var(--line);border-radius:8px;padding:10px 12px;background:var(--inset);display:grid;gap:4px;align-content:start}
+.wxc .m{font-weight:600}
+.wxc .s{font-size:12px;color:var(--muted)}
+.meter{height:6px;border-radius:3px;background:color-mix(in srgb,var(--b-core) 18%,transparent);overflow:hidden}
+.meter span{display:block;height:100%;background:var(--b-core);border-radius:3px}
+.meter.warn span{background:var(--warn)} .meter.crit span{background:var(--crit)}
+.brk{display:grid;gap:10px;margin-top:12px}
+.brk .line{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:4px 10px;font-size:13px}
+.brk .line .meter{grid-column:1 / -1}
+.sectors{display:flex;flex-wrap:wrap;gap:6px;margin-top:10px}
+.sectors .chip{font-weight:500}
+.badges{display:flex;flex-wrap:wrap;gap:4px;justify-content:flex-end}
+.rowacts{display:inline-flex;gap:6px}
+.stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:10px;margin-top:12px}
+.stat{border:1px solid var(--line);border-radius:8px;padding:10px 12px;background:var(--inset);display:grid;gap:3px}
+.stat .k{font-size:12px;color:var(--muted)}
+.stat .v{font-size:20px;font-weight:600}
+.stat .n{font-size:12px;color:var(--ink-2)}
+.settings{display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:10px;margin-top:12px;align-items:end}
+.inline{display:inline-flex;gap:6px;align-items:center}
+.inline input{width:130px;padding:4px 6px;font-size:12.5px}
+h3{font-size:14px;font-weight:600;margin:18px 0 0}
 </style>
 </head>
 <body>
@@ -191,13 +220,32 @@ input,select{font:inherit;font-size:14px;color:var(--ink);background:var(--inset
   <header class="top">
     <div>
       <h1>Swing Desk</h1>
-      <p class="sub">Allocation by stock type, and every position protected by a stop</p>
+      <p class="sub">A fixed loss on every trade, a stop on every position, and the book kept in balance</p>
     </div>
     <div class="tags" id="tags"></div>
   </header>
   <div id="banner" class="banner crit" hidden></div>
 
   <section class="kpis" id="kpis" aria-label="Book summary"></section>
+
+  <div class="row2">
+    <section class="card" aria-labelledby="wx-h">
+      <div class="sec-head">
+        <h2 id="wx-h">Market weather</h2>
+        <span class="small">Scales the fixed loss for new buys in each market</span>
+      </div>
+      <div class="wx" id="wx"></div>
+    </section>
+    <section class="card" aria-labelledby="brk-h">
+      <div class="sec-head">
+        <h2 id="brk-h">Circuit breakers</h2>
+        <span id="brk-status"></span>
+      </div>
+      <div class="brk" id="brk"></div>
+      <div class="actions" id="brk-acts"></div>
+      <p class="msg" id="brk-msg" hidden></p>
+    </section>
+  </div>
 
   <section class="card" aria-labelledby="mix-h">
     <div class="sec-head">
@@ -220,6 +268,8 @@ input,select{font:inherit;font-size:14px;color:var(--ink);background:var(--inset
       </div>
     </div>
     <div class="buckets" id="buckets"></div>
+    <h3>By sector</h3>
+    <div class="sectors" id="sectors"></div>
     <p class="rules-line" id="rules-line"></p>
   </section>
 
@@ -228,13 +278,14 @@ input,select{font:inherit;font-size:14px;color:var(--ink);background:var(--inset
       <h2 id="book-h">Open positions</h2>
       <div class="filters" id="filters" role="group" aria-label="Filter by stock type"></div>
     </div>
+    <p class="msg" id="book-msg" hidden></p>
     <div class="table-wrap">
-      <table class="book">
+      <table class="book" style="min-width:1000px">
         <thead><tr>
           <th scope="col">Stock</th><th scope="col">Shares</th><th scope="col">Entry</th><th scope="col">Last</th>
           <th scope="col">Profit / loss</th><th scope="col">Stop</th><th scope="col">Target</th>
-          <th scope="col">Stop → target</th><th scope="col" class="center">Protected</th>
-          <th scope="col" class="center">Stop-outs</th><th scope="col">Days</th>
+          <th scope="col">Stop → target</th>
+          <th scope="col">Flags</th><th scope="col">Days</th><th scope="col"></th>
         </tr></thead>
         <tbody id="rows"></tbody>
       </table>
@@ -246,7 +297,7 @@ input,select{font:inherit;font-size:14px;color:var(--ink);background:var(--inset
       <h2 id="gate-h">Check a new trade</h2>
       <form class="form" id="gate-form" autocomplete="off">
         <div class="field">
-          <label for="gate-sym">Stock (e.g. NVDA, 700:HK, D05:SG, 7203:JP, HSBA:LN)</label>
+          <label for="gate-sym">Stock (NVDA, 700:HK, D05:SG, 7203:JP, HSBA:LN)</label>
           <input id="gate-sym" list="gate-list" placeholder="Ticker">
           <datalist id="gate-list"></datalist>
         </div>
@@ -264,6 +315,17 @@ input,select{font:inherit;font-size:14px;color:var(--ink);background:var(--inset
           <input id="gate-limit" inputmode="decimal" placeholder="Auto">
         </div>
         <button class="btn" type="submit" id="gate-go">Check</button>
+        <div class="field">
+          <label for="gate-setup">Setup (for the journal)</label>
+          <select id="gate-setup">
+            <option>Pullback</option><option>Breakout</option><option>Base</option>
+            <option>Earnings gap</option><option>Trend</option><option>Other</option>
+          </select>
+        </div>
+        <div class="field" style="grid-column:span 3">
+          <label for="gate-note">Why this trade (optional)</label>
+          <input id="gate-note" placeholder="e.g. pullback to the 21-day, volume drying up">
+        </div>
       </form>
       <div id="gate-out"></div>
       <p class="hint">The check runs before every dashboard buy. A buy placed directly in TWS or the IBKR app can't be blocked; it gets its stop and target anyway, and an alert if it breaks a rule.</p>
@@ -281,6 +343,29 @@ input,select{font:inherit;font-size:14px;color:var(--ink);background:var(--inset
     </div>
   </div>
 
+  <section class="card" aria-labelledby="jr-h">
+    <div class="sec-head">
+      <h2 id="jr-h">Journal</h2>
+      <a class="btn small ghost" id="jr-csv" href="/api/journal.csv" hidden>Download CSV</a>
+    </div>
+    <div class="stats" id="jr-stats"></div>
+    <div class="two" style="margin-top:4px">
+      <div><h3>By stock type</h3><div class="table-wrap"><table id="jr-bucket"></table></div></div>
+      <div><h3>By setup</h3><div class="table-wrap"><table id="jr-setup"></table></div></div>
+    </div>
+    <h3>Closed trades</h3>
+    <div class="table-wrap">
+      <table style="min-width:900px">
+        <thead><tr>
+          <th scope="col">Stock</th><th scope="col">Setup</th><th scope="col">Closed</th><th scope="col">Days</th>
+          <th scope="col">Result</th><th scope="col">R</th><th scope="col">Exit</th>
+          <th scope="col">Best / worst</th><th scope="col">Note</th>
+        </tr></thead>
+        <tbody id="jr-rows"></tbody>
+      </table>
+    </div>
+  </section>
+
   <section class="card" aria-labelledby="wl-h">
     <div class="sec-head">
       <h2 id="wl-h">Watchlist</h2>
@@ -292,14 +377,21 @@ input,select{font:inherit;font-size:14px;color:var(--ink);background:var(--inset
     </div>
     <p class="msg" id="wl-msg" hidden></p>
     <div class="table-wrap">
-      <table class="wl" style="min-width:760px">
+      <table class="wl" style="min-width:900px">
         <thead><tr>
           <th scope="col">Stock</th><th scope="col">Last</th><th scope="col">Daily range</th>
-          <th scope="col">Stock type</th><th scope="col">Status</th><th scope="col">Source</th><th scope="col"></th>
+          <th scope="col">Stock type</th><th scope="col">Earnings</th><th scope="col">Status</th>
+          <th scope="col"></th>
         </tr></thead>
         <tbody id="wl-rows"></tbody>
       </table>
     </div>
+  </section>
+
+  <section class="card" aria-labelledby="set-h">
+    <div class="sec-head"><h2 id="set-h">Settings</h2><span class="small">Changes apply at once and are kept in the journal</span></div>
+    <form class="settings" id="set-form" autocomplete="off"></form>
+    <p class="msg" id="set-msg" hidden></p>
   </section>
 
   <section class="notes card" aria-labelledby="notes-h">
@@ -326,11 +418,15 @@ let STATE = /*__STATE__*/null;
   const sUsd = n => (n > 0.5 ? "+" : n < -0.5 ? "−" : "") + usd(n);
   const pct = (x, d = 0) => (x * 100).toFixed(d) + "%";
   const sPct = (x, d = 1) => (x > 0 ? "+" : x < 0 ? "−" : "") + Math.abs(x * 100).toFixed(d) + "%";
+  const sR = r => r == null ? "—" : (r > 0 ? "+" : r < 0 ? "−" : "") + Math.abs(r).toFixed(2) + "R";
   const px = (n, d) => n == null ? "—" : Number(n).toLocaleString("en-US", { minimumFractionDigits: d ?? 2, maximumFractionDigits: d ?? 2 });
   const el = (tag, cls, text) => { const e = document.createElement(tag); if (cls) e.className = cls; if (text != null) e.textContent = text; return e; };
   const chip = (kind, icon, label) => { const c = el("span", "chip " + kind); c.append(el("span", "ic", icon), document.createTextNode(label)); return c; };
   const swatch = id => { const s = el("span", "sw " + id); s.setAttribute("aria-hidden", "true"); return s; };
-  const fmtDate = iso => { const d = new Date(iso + (iso.length === 10 ? "T12:00:00" : "")); return d.toLocaleDateString("en-GB", { day: "numeric", month: "short" }); };
+  const fmtDate = iso => { if (!iso) return "—"; const d = new Date(iso.length === 10 ? iso + "T12:00:00" : iso); return d.toLocaleDateString("en-GB", { day: "numeric", month: "short" }); };
+  const btn = (label, cls, onClick, disabled) => { const b = el("button", "btn small " + (cls || "ghost"), label); b.type = "button"; b.disabled = !!disabled; if (onClick) b.addEventListener("click", onClick); return b; };
+  const meter = (frac, kind) => { const m = el("div", "meter" + (kind ? " " + kind : "")); const s = el("span"); s.style.width = Math.max(0, Math.min(100, frac * 100)) + "%"; m.append(s); return m; };
+  const say = (id, text, ok) => { const m = $(id); m.textContent = text; m.className = "msg " + (ok ? "ok" : "err"); m.hidden = false; };
 
   // ---- tooltip ----
   const tip = $("tip");
@@ -357,34 +453,74 @@ let STATE = /*__STATE__*/null;
     if (!r.ok) throw new Error(data.error || `HTTP ${r.status}`);
     return data;
   }
+  const snapshotOnly = id => { say(id, "This is a snapshot. Run `fireplanner trade run` to act from the dashboard.", false); };
 
-  // ---- render: header ----
+  // ---- header ----
   function renderHeader(s) {
     const tags = $("tags"); tags.replaceChildren();
-    const mode = el("span", "tag" + (s.mode === "live" ? " live" : ""), s.mode === "live" ? "LIVE ACCOUNT" : s.mode === "paper" ? "Paper account" : "Simulated");
-    tags.append(mode);
+    tags.append(el("span", "tag" + (s.mode === "live" ? " live" : ""), s.mode === "live" ? "LIVE ACCOUNT" : s.mode === "paper" ? "Paper account" : "Simulated"));
     tags.append(el("span", "tag", s.orders_enabled ? "Orders on" : "Dry run · orders off"));
     const t = s.totals;
     if (t.open === 0) tags.append(chip("info", "·", "No open positions"));
     else if (t.protected === t.open) tags.append(chip("good", "✓", `${t.protected} of ${t.open} positions have a stop`));
     else tags.append(chip("crit", "✕", `${t.open - t.protected} of ${t.open} positions have NO stop`));
-    const when = new Date(s.generated_at);
-    tags.append(el("span", "tag", (LIVE ? "Updated " : "Snapshot ") + when.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })));
+    if (s.breaker && s.breaker.paused) tags.append(chip("crit", "■", "New buys paused"));
+    tags.append(el("span", "tag", (LIVE ? "Updated " : "Snapshot ") + new Date(s.generated_at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })));
     const b = $("banner");
     if (s.error) { b.textContent = "The guardian hit a problem: " + s.error; b.hidden = false; } else b.hidden = true;
   }
 
   function renderKpis(s) {
-    const t = s.totals, box = $("kpis"); box.replaceChildren();
+    const t = s.totals, r = s.rules, box = $("kpis"); box.replaceChildren();
     const k = [
-      { label: "Slots used", value: `${t.slots_used} of ${t.max_slots}`, note: `${t.max_slots - t.slots_used} free · ${usd(s.rules.slot_usd)} each` },
-      { label: "Invested now", value: usd(t.invested_usd), note: t.cash_usd != null ? `${usd(t.cash_usd)} cash available` : `of ${usd(t.max_slots * s.rules.slot_usd)} capacity` },
+      { label: "Positions", value: `${t.slots_used} of ${t.max_slots}`, note: `${usd(r.risk_per_trade_usd)} fixed loss per trade` },
+      { label: "Invested now", value: usd(t.invested_usd), note: `of ${usd(r.max_invested_usd)} limit${t.cash_usd != null ? ` · ${usd(t.cash_usd)} cash` : ""}` },
       { label: "Open profit / loss", value: sUsd(t.pl_usd), cls: t.pl_usd >= 0 ? "up" : "down", note: `${sPct(t.pl_pct)} on cost` },
-      { label: "Lost if every stop hits", value: usd(t.risk_usd), note: `${t.moved} stop${t.moved === 1 ? "" : "s"} already at or above entry` },
+      { label: "Lost if every stop hits", value: usd(t.risk_usd), note: `of ${usd(r.max_open_risk_usd)} limit · ${t.moved} stop${t.moved === 1 ? "" : "s"} at or above entry` },
     ];
     k.forEach(x => { const d = el("div", "kpi"); d.append(el("span", "label", x.label), el("span", "value" + (x.cls ? " " + x.cls : ""), x.value), el("span", "note", x.note)); box.append(d); });
   }
 
+  // ---- weather + breakers ----
+  function renderWeather(s) {
+    const box = $("wx"); box.replaceChildren();
+    const ws = Object.values(s.weather || {});
+    if (!ws.length) { box.append(el("p", "small", "No weather readings configured.")); return; }
+    ws.forEach(w => {
+      const c = el("div", "wxc");
+      c.append(el("span", "m", w.market_name));
+      if (!w.label) c.append(chip("info", "·", "No reading"));
+      else if (w.multiplier <= 0) c.append(chip("crit", "✕", `${w.label} · buys paused`));
+      else if (w.multiplier < 1) c.append(chip("warn", "▲", `${w.label} · ${pct(w.multiplier)} size`));
+      else c.append(chip("good", "✓", `${w.label} · full size`));
+      if (w.score != null) c.append(meter(w.score, w.multiplier <= 0 ? "crit" : w.multiplier < 1 ? "warn" : ""));
+      c.append(el("span", "s", w.label ? `${w.proxy} · score ${Math.round(w.score * 100)} · ${fmtDate(w.as_of)}` : (w.note || w.proxy)));
+      box.append(c);
+    });
+  }
+  function renderBreaker(s) {
+    const b = s.breaker, r = s.rules, box = $("brk"); box.replaceChildren();
+    const st = $("brk-status"); st.replaceChildren();
+    st.append(b.paused ? chip("crit", "■", "Buys paused") : chip("good", "✓", "Buys allowed"));
+    const line = (label, value, frac) => { const d = el("div", "line"); d.append(el("span", null, label), el("b", null, value), meter(frac, frac >= 1 ? "crit" : frac >= 0.66 ? "warn" : "")); box.append(d); };
+    line("Today's realized result", `${sUsd(b.today_pl_usd)} (limit −${usd(r.daily_loss_limit_usd)})`, Math.max(0, -b.today_pl_usd) / r.daily_loss_limit_usd);
+    line("This week", `${sUsd(b.week_pl_usd)} (limit −${usd(r.weekly_loss_limit_usd)})`, Math.max(0, -b.week_pl_usd) / r.weekly_loss_limit_usd);
+    line("Stop-outs in a row", `${b.losses_in_a_row} of ${r.max_consecutive_losses}`, b.losses_in_a_row / r.max_consecutive_losses);
+    line("Buys sent today", `${b.entries_today} of ${r.max_entries_per_day}`, b.entries_today / r.max_entries_per_day);
+    b.reasons.forEach(x => box.append(el("p", "msg err", x)));
+    const acts = $("brk-acts"); acts.replaceChildren();
+    const act = (label, path, cls) => btn(label, cls, async () => { if (!LIVE) return snapshotOnly("brk-msg"); try { const res = await api(path, {}); say("brk-msg", res.message, true); refresh(); } catch (e) { say("brk-msg", e.message, false); } });
+    if (b.paused) acts.append(act("Resume buys", "/api/resume", ""));
+    else acts.append(act("Pause buys", "/api/pause"));
+    const kill = btn("Kill switch", "danger", () => {
+      if (!LIVE) return snapshotOnly("brk-msg");
+      acts.replaceChildren(el("span", null, "Cancel every working buy order and pause buys? Stops stay."),
+        act("Yes, kill", "/api/kill", "danger"), btn("Cancel", "ghost", () => renderBreaker(STATE)));
+    });
+    acts.append(kill);
+  }
+
+  // ---- bucket mix ----
   function renderMix(s) {
     const B = s.buckets, total = B.reduce((a, b) => a + b.value_usd, 0);
     const vol = B.find(b => b.id === "volatile"), steady = B.find(b => b.id === "steady");
@@ -394,14 +530,11 @@ let STATE = /*__STATE__*/null;
     if (total > 0) {
       ins.append("Volatile holds ", el("b", null, pct(vol.money_share)), " of your money but drives ", el("b", null, pct(vol.swing_share)), " of your daily swing.");
       const avg = b => b.value_usd ? b.swing_usd / b.value_usd : 0;
-      if (avg(vol) && avg(steady)) why.textContent = `A Volatile stock moves about ${(avg(vol) / avg(steady)).toFixed(1)}× as much in a day as a Steady one, so the same slot carries far more day-to-day movement. Watch the second bar, not just the first.`;
+      if (avg(vol) && avg(steady)) why.textContent = `A Volatile stock moves about ${(avg(vol) / avg(steady)).toFixed(1)}× as much in a day as a Steady one. Every trade risks the same fixed loss, so Volatile positions are smaller, but they still drive more of the day-to-day movement.`;
       st.append(vol.swing_share > s.rules.swing_guide ? chip("warn", "▲", `Above ${pct(s.rules.swing_guide)} swing guide`) : chip("good", "✓", `Within ${pct(s.rules.swing_guide)} swing guide`));
-    } else {
-      ins.textContent = "No open positions yet. The mix fills in as trades open.";
-    }
+    } else ins.textContent = "No open positions yet. The mix fills in as trades open.";
     const legend = $("legend"); legend.replaceChildren();
     s.rules.buckets.forEach(b => { const x = el("span"); x.append(swatch(b.id), document.createTextNode(`${b.name} · target +${pct(b.target)}`)); legend.append(x); });
-
     const stack = (id, key, shareKey, describe) => {
       const box = $(id); box.replaceChildren();
       if (!total) { box.append(el("div", "empty", "No positions")); return; }
@@ -420,29 +553,33 @@ let STATE = /*__STATE__*/null;
     stack("stack-money", "value_usd", "money_share", b => [pct(b.money_share, 1) + " of money", `${usd(b.value_usd)} in ${b.n} position${b.n === 1 ? "" : "s"}`]);
     stack("stack-swing", "swing_usd", "swing_share", b => [pct(b.swing_share, 1) + " of daily swing", `about ${usd(b.swing_usd)} on a normal day`]);
     requestAnimationFrame(fitLabels);
-
     const box = $("buckets"); box.replaceChildren();
     B.forEach(b => {
       const card = el("article", "bucket"), head = el("div", "bucket-head"), left = el("div");
       const nm = el("div", "bname"); nm.append(swatch(b.id), el("span", null, b.name));
-      const rule = s.rules.buckets.find(r => r.id === b.id);
-      const band = rule.max_atr == null ? `Moves over ${pct(s.rules.buckets[1].max_atr, 1).replace(".0", "")} a day` : b.id === "steady" ? `Moves under ${pct(rule.max_atr, 1).replace(".0", "")} a day` : `Moves ${pct(s.rules.buckets[0].max_atr, 1).replace(".0", "").replace("%", "")}–${pct(rule.max_atr, 1).replace(".0", "")} a day`;
+      const rule = s.rules.buckets.find(r => r.id === b.id), bs = s.rules.buckets;
+      const p1 = x => pct(x, 1).replace(".0", "");
+      const band = rule.max_atr == null ? `Moves over ${p1(bs[1].max_atr)} a day` : b.id === bs[0].id ? `Moves under ${p1(rule.max_atr)} a day` : `Moves ${p1(bs[0].max_atr).replace("%", "")}–${p1(rule.max_atr)} a day`;
       left.append(nm, el("div", "brule", `${band} · target +${pct(b.target)}`));
-      const status = b.room <= 0 ? chip("crit", "✕", b.n >= b.cap ? "Full · new buys blocked" : "No free slots") : b.room === 1 ? chip("warn", "▲", "1 slot left") : chip("good", "✓", `${b.room} slots free`);
+      const status = b.room <= 0 ? chip("crit", "✕", b.n >= b.cap ? "Full · new buys blocked" : "No free positions") : b.room === 1 ? chip("warn", "▲", "1 left") : chip("good", "✓", `${b.room} free`);
       head.append(left, status);
       const slots = el("div"); const pips = el("div", "pips"); pips.setAttribute("aria-hidden", "true");
       for (let i = 0; i < b.cap; i++) pips.append(el("span", "pip " + b.id + (i < b.n ? " on" : "")));
-      slots.append(pips, el("div", "slots-text", `${b.n} of ${b.cap} slots used · cap ${usd(b.cap * s.rules.slot_usd)}`));
+      slots.append(pips, el("div", "slots-text", `${b.n} of ${b.cap} positions`));
       const stats = el("div", "bstats");
       const stat = (l, v, cls) => { const d = el("div"); d.append(el("small", null, l), el("b", cls, v)); return d; };
       stats.append(stat("Value", usd(b.value_usd)), stat("Profit / loss", sUsd(b.pl_usd), b.pl_usd >= 0 ? "up" : "down"), stat("Daily swing", "≈" + usd(b.swing_usd)));
       card.append(head, slots, stats); box.append(card);
     });
-    $("rules-line").textContent = `Book limit ${s.rules.max_slots} slots × ${usd(s.rules.slot_usd)}. Bucket caps block new buys once full; the swing guide warns but doesn't block.`;
+    const sec = $("sectors"); sec.replaceChildren();
+    if (!s.sectors.length) sec.append(el("span", "small", "No open positions."));
+    s.sectors.forEach(g => {
+      const full = g.sector !== "Unknown" && g.n >= s.rules.max_per_sector;
+      sec.append(chip(full ? "warn" : "info", full ? "▲" : "·", `${g.sector} ${g.n}/${s.rules.max_per_sector} · ${usd(g.value_usd)}`));
+    });
+    $("rules-line").textContent = `At most ${s.rules.max_slots} positions and ${usd(s.rules.max_invested_usd)} invested; ${s.rules.max_per_sector} per sector. Caps block new buys once full; the swing guide warns but doesn't block.`;
   }
-  function fitLabels() {
-    document.querySelectorAll(".seg span").forEach(sp => { sp.hidden = false; if (sp.scrollWidth + 8 > sp.parentElement.clientWidth) sp.hidden = true; });
-  }
+  function fitLabels() { document.querySelectorAll(".seg span").forEach(sp => { sp.hidden = false; if (sp.scrollWidth + 8 > sp.parentElement.clientWidth) sp.hidden = true; }); }
   addEventListener("resize", fitLabels);
 
   // ---- positions ----
@@ -471,6 +608,13 @@ let STATE = /*__STATE__*/null;
       box.append(b);
     });
   }
+  function confirmRow(cell, question, label, run) {
+    const keep = [...cell.childNodes];
+    cell.replaceChildren();
+    const w = el("span", "rowacts"); w.append(el("span", "small", question));
+    w.append(btn(label, "danger", async () => { await run(); }), btn("Cancel", "ghost", () => cell.replaceChildren(...keep)));
+    cell.append(w);
+  }
   function renderRows(s) {
     const tb = $("rows"); tb.replaceChildren();
     const ps = s.positions.filter(p => filter === "all" || p.bucket === filter);
@@ -480,16 +624,33 @@ let STATE = /*__STATE__*/null;
       const td = (child, cls) => { const c = el("td", cls); if (child instanceof Node) c.append(child); else c.textContent = child; return c; };
       const tick = el("span", "tick"); tick.append(swatch(p.bucket), document.createTextNode(p.symbol));
       const name = el("div"); name.append(tick, el("span", "small", `${BUCKET_NAMES[p.bucket]}${p.bucket_confirmed ? "" : " (suggested)"} · ${MARKET_SHORT[p.market] || p.market}`));
+      name.title = [p.name, p.sector, p.setup ? "Setup: " + p.setup : ""].filter(Boolean).join(" · ");
       const pl = el("div"); pl.append(el("span", p.pl_usd >= 0 ? "up" : "down", sUsd(p.pl_usd)), el("span", "small", sPct(p.pl_pct)));
       const stop = el("div"); stop.append(el("span", null, px(p.stop, p.decimals)));
       if (p.stop_state === "breakeven") stop.append(el("span", "ok-small", "✓ at entry"));
       else if (p.stop_state === "trailing") stop.append(el("span", "ok-small", `✓ trailing ${sPct(p.stop_from_entry)}`));
-      else stop.append(el("span", "small", sPct(p.stop_from_entry)));
+      else stop.append(el("span", "small", `${sPct(p.stop_from_entry)} · ${usd(p.risk_usd)}`));
       const tgt = el("div"); tgt.append(el("span", null, px(p.target, p.decimals)), el("span", "small", p.half_sold ? "half sold" : `${p.target_qty} sh · +${pct(s.rules.buckets.find(b => b.id === p.bucket).target)}`));
-      const prot = p.protected ? chip("good", "✓", "Stop") : chip("crit", "✕", "No stop");
-      const strikes = p.strikes ? chip("warn", "▲", `${p.strikes} of ${s.rules.max_strikes}`) : el("span", "small", "—");
+      if (!p.protected) stop.append(chip("crit", "✕", "NO STOP"));
+      const flags = el("div", "badges");
+      if (p.time_stop) flags.append(chip("warn", "⏱", "Time stop"));
+      if (p.earnings) flags.append(chip(p.earnings.days <= s.rules.earnings_warn_days ? "warn" : "info", "E", p.earnings.days === 0 ? "Earnings today" : `Earnings ${fmtDate(p.earnings.date)} · ${p.earnings.days}d`));
+      if (p.strikes) flags.append(chip("warn", "▲", `${p.strikes} of ${s.rules.max_strikes} strikes`));
+      if (p.adds) flags.append(chip("info", "+", "Added"));
+      if (p.exit_working) flags.append(chip("info", "↘", "Sell working"));
+      if (!flags.childNodes.length) flags.append(el("span", "small", "—"));
       const last = el("div"); last.append(el("span", null, px(p.last, p.decimals)), el("span", "small", p.currency));
-      tr.append(td(name), td(String(p.qty)), td(px(p.entry, p.decimals)), td(last), td(pl), td(stop), td(tgt), td(track(p)), td(prot, "center"), td(strikes, "center"), td(String(p.days)));
+      const acts = el("td"); const w = el("span", "rowacts");
+      const addB = btn("Add", "ghost", () => { $("gate-sym").value = p.key; runCheck(true); $("gate-h").scrollIntoView({ behavior: "smooth", block: "start" }); }, !p.can_add);
+      addB.title = p.can_add ? "Add a second position sized for the same fixed loss" : p.add_problem;
+      const sellB = btn("Sell", "ghost", () => {
+        if (!LIVE) return snapshotOnly("book-msg");
+        confirmRow(acts, `Sell all ${p.qty} ${p.symbol} now?`, "Sell", async () => {
+          try { const r = await api("/api/exit", { key: p.key }); say("book-msg", r.message, r.ok); refresh(); } catch (e) { say("book-msg", e.message, false); }
+        });
+      }, p.exit_working);
+      w.append(addB, sellB); acts.append(w);
+      tr.append(td(name), td(String(p.qty)), td(px(p.entry, p.decimals)), td(last), td(pl), td(stop), td(tgt), td(track(p)), td(flags, "flags"), td(String(p.days)), acts);
       tb.append(tr);
     });
   }
@@ -500,8 +661,13 @@ let STATE = /*__STATE__*/null;
     if (!s.strikes.length) { box.append(el("li", "what", "No recent stop-outs. Every stock has two tries.")); return; }
     s.strikes.forEach(x => {
       const li = el("li"); const who = el("div", "who"); who.append(swatch(x.bucket), document.createTextNode(x.key));
-      const c = x.locked ? chip("crit", "✕", `Locked · unlocks ${fmtDate(x.unlocks_on)}`) : chip("warn", "▲", x.held ? "Last try · held" : `${x.tries_left} try left`);
-      const detail = x.locked ? `Stopped out ${s.rules.max_strikes} times in a row, last on ${fmtDate(x.last_exit)}.` : `Stopped out on ${fmtDate(x.last_exit)} (${sPct(x.last_result)}). The next stop-out locks it for ${s.rules.lockout_days} trading days.`;
+      let c;
+      if (x.locked) {
+        c = el("span", "rowacts");
+        c.append(chip("crit", "✕", x.manual ? "Locked" : `Locked · unlocks ${fmtDate(x.unlocks_on)}`));
+        c.append(btn("Unlock", "ghost", async () => { if (!LIVE) return; try { await api("/api/unlock", { key: x.key }); refresh(); } catch (e) {} }, !LIVE));
+      } else c = chip("warn", "▲", x.held ? "Last try · held" : `${x.tries_left} try left`);
+      const detail = x.locked ? `Stopped out ${s.rules.max_strikes} times in a row, last on ${fmtDate(x.last_exit)}. ${x.manual ? "Stays locked until you unlock it." : ""}` : `Stopped out on ${fmtDate(x.last_exit)} (${sPct(x.last_result)}). The next stop-out locks it.`;
       li.append(who, c, el("div", "what", detail)); box.append(li);
     });
   }
@@ -516,6 +682,51 @@ let STATE = /*__STATE__*/null;
     });
   }
 
+  // ---- journal ----
+  function renderJournal(s) {
+    const J = s.journal, st = J.stats;
+    const box = $("jr-stats"); box.replaceChildren();
+    const card = (label, g) => {
+      const d = el("div", "stat"); d.append(el("span", "k", label));
+      d.append(el("span", "v" + (g.expectancy_r > 0 ? " up" : g.expectancy_r < 0 ? " down" : ""), g.expectancy_r == null ? "—" : `${sR(g.expectancy_r)} / trade`));
+      d.append(el("span", "n", g.trades ? `${g.trades} trades · ${pct(g.win_rate || 0)} won · ${sUsd(g.total_usd)}` : "No closed trades"));
+      if (g.trades) d.append(el("span", "n", `avg win ${sR(g.avg_win_r)} · avg loss ${sR(g.avg_loss_r)}`));
+      return d;
+    };
+    box.append(card("All closed trades", st.all), card("Last 7 days", st.week), card("Last 30 days", st.month));
+    const table = (id, groups, nameFn) => {
+      const t = $(id); t.replaceChildren();
+      const h = el("thead"), hr = el("tr");
+      ["", "Trades", "Won", "Avg win", "Avg loss", "Per trade", "Total"].forEach((x, i) => { const th = el("th", null, x); th.scope = "col"; hr.append(th); });
+      h.append(hr); const b = el("tbody");
+      const keys = Object.keys(groups);
+      if (!keys.length) { const tr = el("tr"), td = el("td", "empty-row", "No closed trades yet."); td.colSpan = 7; tr.append(td); b.append(tr); }
+      keys.forEach(k => {
+        const g = groups[k], tr = el("tr");
+        const n = el("td"); n.append(nameFn(k));
+        tr.append(n, el("td", null, String(g.trades)), el("td", null, pct(g.win_rate || 0)), el("td", null, sR(g.avg_win_r)), el("td", null, sR(g.avg_loss_r)),
+          el("td", g.expectancy_r > 0 ? "up" : g.expectancy_r < 0 ? "down" : "", sR(g.expectancy_r)), el("td", null, sUsd(g.total_usd)));
+        b.append(tr);
+      });
+      t.append(h, b);
+    };
+    table("jr-bucket", st.by_bucket, k => { const x = el("span", "tick"); x.append(swatch(k), document.createTextNode(BUCKET_NAMES[k] || k)); return x; });
+    table("jr-setup", st.by_setup, k => document.createTextNode(k));
+    const tb = $("jr-rows"); tb.replaceChildren();
+    if (!J.trades.length) { const tr = el("tr"), td = el("td", "empty-row", "Closed trades appear here with their result in R."); td.colSpan = 9; tr.append(td); tb.append(tr); }
+    J.trades.forEach(t => {
+      const tr = el("tr");
+      const name = el("div"); const tk = el("span", "tick"); tk.append(swatch(t.bucket), document.createTextNode(t.symbol)); name.append(tk, el("span", "small", MARKET_SHORT[t.market] || t.market));
+      const res = el("div"); res.append(el("span", (t.result_usd || 0) >= 0 ? "up" : "down", sUsd(t.result_usd || 0)), el("span", "small", sPct(t.result_pct || 0)));
+      const ex = el("div"); ex.append(el("span", null, t.exit || "—")); if (t.strike) ex.append(el("span", "small", "strike"));
+      const cells = [name, el("span", null, t.setup || "—"), el("span", null, fmtDate(t.closed)), el("span", null, String(t.days)), res,
+        el("span", t.r > 0 ? "up" : t.r < 0 ? "down" : "", sR(t.r)), ex, el("span", "small", `${sPct(t.mfe)} / ${sPct(t.mae)}`), el("span", "small", t.note || "")];
+      cells.forEach((c, i) => { const td = el("td"); td.append(c); if (i === 8) { td.style.whiteSpace = "normal"; td.style.textAlign = "left"; td.style.maxWidth = "260px"; } tr.append(td); });
+      tb.append(tr);
+    });
+    $("jr-csv").hidden = !LIVE;
+  }
+
   // ---- watchlist ----
   function renderWatch(s) {
     const tb = $("wl-rows"); tb.replaceChildren();
@@ -527,49 +738,71 @@ let STATE = /*__STATE__*/null;
       const td = (child, cls) => { const c = el("td", cls); if (child instanceof Node) c.append(child); else c.textContent = child; return c; };
       const bucket = w.confirmed || w.suggested;
       const tick = el("span", "tick"); if (bucket) tick.append(swatch(bucket)); tick.append(document.createTextNode(w.symbol));
-      const name = el("div"); name.append(tick, el("span", "small", `${MARKET_SHORT[w.market] || w.market}${w.lot_size > 1 ? ` · lot ${w.lot_size}` : ""}${w.name ? " · " + w.name : ""}`));
+      const name = el("div"); name.append(tick, el("span", "small", `${MARKET_SHORT[w.market] || w.market}${w.lot_size > 1 ? ` · lot ${w.lot_size}` : ""}${w.sector ? " · " + w.sector : ""}${w.name ? " · " + w.name : ""}${w.source === "manual" ? " · added by you" : ""}`));
       const last = el("div"); last.append(el("span", null, px(w.last, w.decimals)), el("span", "small", w.currency));
       const typ = el("div", "typ");
       const sel = el("select"); sel.setAttribute("aria-label", `Stock type for ${w.key}`); sel.disabled = !LIVE;
       ["steady", "core", "volatile"].forEach(b => { const op = el("option", null, BUCKET_NAMES[b]); op.value = b; if (b === bucket) op.selected = true; sel.append(op); });
       sel.addEventListener("change", () => setBucket(w.key, sel.value));
       typ.append(sel);
-      if (!w.confirmed && w.suggested) {
-        const cb = el("button", "btn small ghost", "Confirm"); cb.type = "button"; cb.disabled = !LIVE;
-        cb.addEventListener("click", () => setBucket(w.key, sel.value)); typ.append(cb);
-        typ.append(el("span", "small", "suggested"));
-      } else if (w.confirmed) typ.append(el("span", "ok-small", "✓ confirmed"));
+      if (!w.confirmed && w.suggested) { const cb = btn("Confirm", "ghost", () => setBucket(w.key, sel.value), !LIVE); cb.title = "Suggested from its daily range: confirm it"; typ.append(cb); }
+      else if (w.confirmed) typ.append(el("span", "ok-small", "✓ confirmed"));
+      const earn = el("div", "inline");
+      if (w.earnings) earn.append(chip(w.earnings.days <= s.rules.earnings_warn_days ? "warn" : "info", "E", `${fmtDate(w.earnings.date)} · ${w.earnings.days}d`));
+      if (LIVE) {
+        const inp = el("input"); inp.type = "date"; inp.setAttribute("aria-label", `Earnings date for ${w.key}`); if (w.earnings) inp.value = w.earnings.date;
+        inp.addEventListener("change", async () => { try { const r = await api("/api/earnings", { key: w.key, date: inp.value || "" }); say("wl-msg", r.message, true); refresh(); } catch (e) { say("wl-msg", e.message, false); } });
+        earn.append(inp);
+      } else if (!w.earnings) earn.append(el("span", "small", "—"));
       let status;
       if (w.error) status = chip("crit", "✕", "Not found");
-      else if (w.locked) status = chip("crit", "✕", `Locked · ${fmtDate(w.unlocks_on)}`);
+      else if (w.locked) { status = el("span", "rowacts"); status.append(chip("crit", "✕", w.manual_lock ? "Locked" : `Locked · ${fmtDate(w.unlocks_on)}`)); status.append(btn("Unlock", "ghost", async () => { try { await api("/api/unlock", { key: w.key }); refresh(); } catch (e) { say("wl-msg", e.message, false); } }, !LIVE)); }
       else if (w.held) status = chip("info", "●", "Held");
       else if (w.tries_left < s.rules.max_strikes) status = chip("warn", "▲", "Last try");
       else status = chip("good", "✓", "Ready");
-      const btns = el("span", "rowbtns");
-      const chk = el("button", "btn small ghost", "Check"); chk.type = "button";
-      chk.addEventListener("click", () => { $("gate-sym").value = w.key; $("gate-bucket").value = ""; $("gate-limit").value = ""; runCheck(); $("gate-h").scrollIntoView({ behavior: "smooth", block: "start" }); });
-      const rm = el("button", "btn small ghost", "Remove"); rm.type = "button"; rm.disabled = !LIVE;
-      rm.addEventListener("click", async () => { try { const r = await api("/api/unwatch", { key: w.key }); wlMsg(r.message, true); refresh(); } catch (e) { wlMsg(e.message, false); } });
-      btns.append(chk, rm);
-      tr.append(td(name), td(last), td(w.atr != null ? pct(w.atr, 1) : "—"), td(typ), td(status), td(w.source), td(btns));
+      const btns = el("span", "rowacts");
+      btns.append(btn("Check", "ghost", () => { $("gate-sym").value = w.key; $("gate-bucket").value = ""; $("gate-limit").value = ""; runCheck(false); $("gate-h").scrollIntoView({ behavior: "smooth", block: "start" }); }));
+      btns.append(btn("Remove", "ghost", async () => { try { const r = await api("/api/unwatch", { key: w.key }); say("wl-msg", r.message, true); refresh(); } catch (e) { say("wl-msg", e.message, false); } }, !LIVE));
+      tr.append(td(name), td(last), td(w.atr != null ? pct(w.atr, 1) : "—"), td(typ), td(earn), td(status), td(btns));
       tb.append(tr);
     });
   }
-  function wlMsg(text, ok) { const m = $("wl-msg"); m.textContent = text; m.className = "msg " + (ok ? "ok" : "err"); m.hidden = false; }
-  async function setBucket(key, bucket) {
-    try { const r = await api("/api/bucket", { key, bucket }); wlMsg(r.message, true); refresh(); } catch (e) { wlMsg(e.message, false); }
-  }
+  async function setBucket(key, bucket) { try { const r = await api("/api/bucket", { key, bucket }); say("wl-msg", r.message, true); refresh(); } catch (e) { say("wl-msg", e.message, false); } }
   $("wl-form").addEventListener("submit", async e => {
     e.preventDefault();
-    if (!LIVE) { wlMsg("This is a snapshot. Run `fireplanner trade run` to edit the watchlist.", false); return; }
+    if (!LIVE) return snapshotOnly("wl-msg");
     const symbol = $("wl-sym").value.trim(); if (!symbol) return;
     const lot = parseInt($("wl-lot").value, 10);
-    try { const r = await api("/api/watch", { symbol, lot_size: Number.isFinite(lot) ? lot : null }); wlMsg(r.message, true); $("wl-sym").value = ""; $("wl-lot").value = ""; refresh(); }
-    catch (err) { wlMsg(err.message, false); }
+    try { const r = await api("/api/watch", { symbol, lot_size: Number.isFinite(lot) ? lot : null }); say("wl-msg", r.message, true); $("wl-sym").value = ""; $("wl-lot").value = ""; refresh(); }
+    catch (err) { say("wl-msg", err.message, false); }
+  });
+
+  // ---- settings ----
+  const SETTING_LABELS = { time_stop_weeks: ["Time stop after (weeks)", 1, ""], time_stop_min_gain: ["...unless it has reached (+%)", 100, "%"], earnings_warn_days: ["Warn on earnings within (days)", 1, ""], risk_per_trade_usd: ["Fixed loss per trade ($)", 1, ""] };
+  let settingsDrawn = false;
+  function renderSettings(s) {
+    if (settingsDrawn && LIVE) return;   // keep what the user is typing
+    const f = $("set-form"); f.replaceChildren();
+    Object.entries(s.settings).forEach(([k, v]) => {
+      const [label, scale] = SETTING_LABELS[k] || [k, 1];
+      const d = el("div", "field"); const id = "set-" + k;
+      const l = el("label", null, label); l.htmlFor = id;
+      const i = el("input"); i.id = id; i.name = k; i.inputMode = "decimal"; i.value = String(Math.round(v.value * scale * 100) / 100); i.disabled = !LIVE;
+      i.dataset.scale = scale;
+      d.append(l, i); f.append(d);
+    });
+    const b = el("button", "btn small", "Save"); b.type = "submit"; b.disabled = !LIVE; f.append(b);
+    settingsDrawn = true;
+  }
+  $("set-form").addEventListener("submit", async e => {
+    e.preventDefault();
+    if (!LIVE) return snapshotOnly("set-msg");
+    const body = {};
+    $("set-form").querySelectorAll("input").forEach(i => { const v = parseFloat(i.value); if (Number.isFinite(v)) body[i.name] = v / Number(i.dataset.scale); });
+    try { const r = await api("/api/settings", body); say("set-msg", r.message, true); settingsDrawn = false; refresh(); } catch (err) { say("set-msg", err.message, false); }
   });
 
   // ---- gate ----
-  let lastCheck = null;
   function renderGate(res, message, ok) {
     const out = $("gate-out"); out.replaceChildren();
     if (message && !res) { out.append(el("p", "msg " + (ok ? "ok" : "err"), message)); return; }
@@ -577,78 +810,78 @@ let STATE = /*__STATE__*/null;
     const p = res.plan, inst = res.instrument, d = inst.decimals;
     const v = el("div", "verdict");
     v.append(res.verdict === "blocked" ? chip("crit", "✕", "Blocked") : res.verdict === "warning" ? chip("warn", "▲", "Allowed, with a warning") : chip("good", "✓", "Allowed"));
-    v.append(el("span", "small", `${inst.symbol} · ${inst.market_name}${inst.name ? " · " + inst.name : ""}`));
+    v.append(el("span", "small", `${res.is_add ? "Add to " : ""}${inst.symbol} · ${inst.market_name}${inst.sector ? " · " + inst.sector : ""}${inst.name ? " · " + inst.name : ""}`));
     out.append(v);
     const order = el("div", "order");
     const item = (label, val, sub) => { const x = el("div"); x.append(el("small", null, label), el("b", null, val)); if (sub) x.append(el("span", "small", sub)); return x; };
     const cost = inst.currency === "USD" ? usd(p.cost_usd) : `${inst.currency} ${p.cost_local.toLocaleString("en-US", { maximumFractionDigits: 0 })} ≈ ${usd(p.cost_usd)}`;
     order.append(
-      item("Buy", `${p.qty} ${inst.symbol}`, `limit ${px(p.limit, d)} · ${cost}${inst.lot_size > 1 ? ` · ${p.qty / inst.lot_size} lot(s) of ${inst.lot_size}` : ""}`),
-      item("Stock type", BUCKET_NAMES[p.bucket], p.atr != null ? `${pct(p.atr, 1)} average daily range` : "no range history"),
-      item("GTC stop", px(p.stop, d), `${sPct(-p.stop_pct)} (${p.stop_basis}) · max loss ≈ ${usd(p.max_loss_usd)}`),
-      item("Target", px(p.target, d), `${sPct(p.target_pct)} on ${p.target_qty} shares ≈ ${usd(p.target_gain_usd * p.target_qty / Math.max(1, p.qty))}`),
+      item(res.is_add ? "Add" : "Buy", `${p.qty} ${inst.symbol}`, `limit ${px(p.limit, d)} · ${cost}${inst.lot_size > 1 ? ` · ${p.qty / inst.lot_size} lot(s) of ${inst.lot_size}` : ""}`),
+      item("Loss if stopped", usd(p.max_loss_usd), `sized for ${usd(p.risk_budget_usd)}${p.sized_by !== "fixed loss" ? " · " + p.sized_by : ""}`),
+      item("GTC stop", px(p.stop, d), `${sPct(-p.stop_pct)} (${p.stop_basis})`),
+      item("Target", px(p.target, d), `${sPct(p.target_pct)} on ${p.target_qty} shares · ${BUCKET_NAMES[p.bucket]}`),
     );
     out.append(order);
     const ul = el("ul", "checks"); const icon = { good: "✓", warn: "!", crit: "✕", info: "i" };
     res.checks.forEach(c => { const li = el("li"); const m = el("span", "mark " + c.level, icon[c.level]); m.setAttribute("aria-hidden", "true"); const t = el("div"); t.append(el("span", "t", c.title), el("span", "d", c.detail)); li.append(m, t); ul.append(li); });
     out.append(ul);
     const acts = el("div", "actions");
-    const buy = el("button", "btn", `Send buy order`); buy.type = "button";
-    const canSend = LIVE && res.verdict !== "blocked" && p.qty > 0;
-    buy.disabled = !canSend;
-    acts.append(buy);
+    const go = btn(res.is_add ? "Send add order" : "Send buy order", "", null, !(LIVE && res.verdict !== "blocked" && p.qty > 0));
+    acts.append(go);
     if (!LIVE) acts.append(el("span", "small", "Snapshot only. Orders are sent from the running service."));
     else if (!res.orders_enabled) acts.append(el("span", "small", "Orders are off (dry run): this logs the order instead of sending it."));
-    buy.addEventListener("click", () => {
+    go.addEventListener("click", () => {
       acts.replaceChildren();
-      const q = el("span", null, `Send BUY ${p.qty} ${inst.symbol} limit ${px(p.limit, d)} (${cost})?`);
-      const yes = el("button", "btn danger", "Confirm buy"); yes.type = "button";
-      const no = el("button", "btn ghost", "Cancel"); no.type = "button";
-      no.addEventListener("click", () => renderGate(res));
+      const yes = btn(res.is_add ? "Confirm add" : "Confirm buy", "danger"); const no = btn("Cancel", "ghost", () => renderGate(res));
       yes.addEventListener("click", async () => {
         yes.disabled = true; no.disabled = true;
         try {
-          const r = await api("/api/enter", { symbol: inst.key, bucket: $("gate-bucket").value || p.bucket, limit: p.limit, expect_qty: p.qty });
+          const r = res.is_add
+            ? await api("/api/add", { key: inst.key, limit: p.limit, expect_qty: p.qty })
+            : await api("/api/enter", { symbol: inst.key, bucket: $("gate-bucket").value || p.bucket, limit: p.limit, expect_qty: p.qty, setup: $("gate-setup").value, note: $("gate-note").value });
           renderGate(r.check || res); $("gate-out").append(el("p", "msg " + (r.ok ? "ok" : "err"), r.message)); refresh();
         } catch (e) { renderGate(res); $("gate-out").append(el("p", "msg err", e.message)); }
       });
-      acts.append(q, yes, no);
+      acts.append(el("span", null, `${res.is_add ? "Add" : "Buy"} ${p.qty} ${inst.symbol} limit ${px(p.limit, d)} (${cost}), losing ${usd(p.max_loss_usd)} if stopped?`), yes, no);
     });
     out.append(acts);
     if (message) out.append(el("p", "msg " + (ok ? "ok" : "err"), message));
   }
-  async function runCheck() {
+  async function runCheck(isAdd) {
     const symbol = $("gate-sym").value.trim(); if (!symbol) return;
     const bucket = $("gate-bucket").value || null;
     const limRaw = $("gate-limit").value.trim(); const limit = limRaw ? parseFloat(limRaw.replace(/,/g, "")) : null;
     if (!LIVE) {
       const demo = (STATE.demo_checks || {})[symbol.toUpperCase()];
-      if (demo) { lastCheck = demo; renderGate(demo); } else renderGate(null, "Snapshot only: try one of the watchlist stocks, or run the service for live checks.", false);
+      if (demo && !isAdd) renderGate(demo); else renderGate(null, isAdd ? "Snapshot only: adds are checked by the running service." : "Snapshot only: try one of the watchlist stocks, or run the service for live checks.", false);
       return;
     }
     $("gate-go").disabled = true; renderGate(null, "Checking with IBKR…", true);
-    try { lastCheck = await api("/api/check", { symbol, bucket, limit }); renderGate(lastCheck); }
+    try { renderGate(await api("/api/check", { symbol, bucket, limit, add: !!isAdd })); }
     catch (e) { renderGate(null, e.message, false); }
     finally { $("gate-go").disabled = false; }
   }
-  $("gate-form").addEventListener("submit", e => { e.preventDefault(); runCheck(); });
+  $("gate-form").addEventListener("submit", e => { e.preventDefault(); runCheck(false); });
 
   // ---- notes ----
   function renderNotes(s) {
     const r = s.rules, b = r.buckets, box = $("notes"); box.replaceChildren();
+    const p1 = x => pct(x, 1).replace(".0", "");
     [
-      `Stock type comes from the average daily range over the last 14 days (ATR as a % of price): Steady under ${pct(b[0].max_atr, 1).replace(".0", "")}, Core ${pct(b[0].max_atr, 1).replace(".0", "")}–${pct(b[1].max_atr, 1).replace(".0", "")}, Volatile above. The system suggests a type and you confirm it.`,
-      `Every trade is ${usd(r.slot_usd)} in whole shares or board lots, converted at the day's exchange rate. The GTC stop is the tighter of ${pct(r.max_stop_pct)} or ${r.atr_stop_mult} × the daily range below entry.`,
-      `At the target, half the position is sold. The stop moves to the entry price once the stock has been ${pct(r.breakeven_at)} above entry, then trails ${r.atr_trail_mult} × the daily range under the highest price since entry. It never moves down.`,
-      `Two strikes per stock: after a stop-out you may re-enter once; a second stop-out in a row locks it for ${r.lockout_days} trading days.`,
-      `Daily swing is position value × average daily range: roughly what a normal day can move each position.`,
+      `Every trade is sized so its stop costs ${usd(r.risk_per_trade_usd)} (before gaps): a calm stock with a tight stop gets a bigger position than a volatile one. No position over ${usd(r.max_position_usd)}; share counts round up unless that adds more than ${pct(r.max_round_up_overshoot)} to the loss.`,
+      `The GTC stop is the tighter of ${pct(r.max_stop_pct)} or ${r.atr_stop_mult} × the average daily range. At the target half is sold; the stop moves to entry at +${pct(r.breakeven_at)}, then trails ${r.atr_trail_mult} × the daily range under the high. It never moves down.`,
+      `Stock type from the 14-day average daily range: Steady under ${p1(b[0].max_atr)}, Core ${p1(b[0].max_atr).replace("%", "")}–${p1(b[1].max_atr)}, Volatile above. Suggested by the system, confirmed by you.`,
+      `Two strikes: after a stop-out you may re-enter once; a second in a row locks the stock ${r.lockout_days == null ? "until you unlock it" : `for ${r.lockout_days} trading days`}. One add to a winner once its stop is at entry, sized for the same fixed loss.`,
+      `Time stop: a position that hasn't reached +${pct(r.time_stop_min_gain)} within ${r.time_stop_weeks} weeks is flagged${r.time_stop_action === "sell" ? " and sold" : ""}. Market weather scales new buys: Defensive half size, Risk-Off none.`,
+      `Circuit breakers pause new buys after ${usd(r.daily_loss_limit_usd)} lost in a day, ${usd(r.weekly_loss_limit_usd)} in a week, or ${r.max_consecutive_losses} stop-outs in a row. Open positions keep their stops.`,
     ].forEach(t => box.append(el("li", null, t)));
   }
 
   function render(s) {
     if (!s || !s.rules) return;
     STATE = s;
-    renderHeader(s); renderKpis(s); renderMix(s); renderFilters(s); renderRows(s); renderStrikes(s); renderFeed(s); renderWatch(s); renderNotes(s);
+    renderHeader(s); renderKpis(s); renderWeather(s); renderBreaker(s); renderMix(s); renderFilters(s); renderRows(s);
+    renderStrikes(s); renderFeed(s); renderJournal(s); renderWatch(s); renderSettings(s); renderNotes(s);
   }
   async function refresh() { try { render(await api("/api/state")); } catch (e) { const b = $("banner"); b.textContent = "Can't reach the trading service: " + e.message; b.hidden = false; } }
 
