@@ -977,3 +977,89 @@ def test_the_demo_page_says_it_is_simulated(demo):
     _, state = demo
     page = render_dashboard(state)
     assert state["mode"] == "sim" and "every position, price, date and index series on this page is simulated" in page
+
+
+# ---------------------------------------------------------------- live IBKR connection
+
+class _Evt:
+    def __iadd__(self, fn):
+        return self
+
+    def __isub__(self, fn):
+        return self
+
+
+class _FakeIB:
+    accounts = ["DU1234567"]
+
+    def __init__(self):
+        self.up = False
+        self.execDetailsEvent, self.orderStatusEvent, self.errorEvent = _Evt(), _Evt(), _Evt()
+
+    def connect(self, host, port, clientId, readonly=False, account=""):
+        self.up = True
+
+    def managedAccounts(self):
+        return list(self.accounts)
+
+    def isConnected(self):
+        return self.up
+
+    def disconnect(self):
+        self.up = False
+
+    def reqMarketDataType(self, t):
+        pass
+
+    def reqExecutions(self):
+        return []
+
+
+def test_a_live_account_behind_a_paper_port_is_refused(monkeypatch):
+    import ib_async
+    from fireplanner.trading.ib_broker import LiveAccountRefused, mask_account
+    monkeypatch.setattr(ib_async, "IB", type("LiveIB", (_FakeIB,), {"accounts": ["U7654321"]}))
+    b = IBBroker(port=7497)                                  # a paper port, but a live account
+    with pytest.raises(LiveAccountRefused, match="LIVE account"):
+        b.connect()
+    assert not b.connected
+    monkeypatch.setattr(ib_async, "IB", _FakeIB)
+    ok = IBBroker(port=4004)                                 # the Docker relay's paper port
+    ok.connect()
+    st = ok.status()
+    assert st["connected"] and st["account_type"] == "paper" and st["account"] == mask_account("DU1234567")
+    assert "1234567" not in st["account"]
+
+
+def test_the_docker_relay_ports_are_classified():
+    assert IBBroker(port=4004).mode == "paper"
+    with pytest.raises(ValueError, match="LIVE"):
+        IBBroker(port=4003)
+
+
+def test_doctor_runs_every_check_without_ordering():
+    from fireplanner.trading.doctor import PROBES, run_doctor
+    broker = SimBroker(clock=T0)
+    for i, (mkt, sym) in enumerate(PROBES.items()):
+        ccy = {"US": "USD", "LSE": "GBP", "SEHK": "HKD", "SGX": "SGD", "TSEJ": "JPY"}[mkt]
+        broker.add(Instrument(sym, mkt, 900 + i, ccy, 100 if mkt in ("SGX", "TSEJ", "SEHK") else 1), 50.0, 0.02)
+    broker.set_bars("SPY", _chart())
+    findings = run_doctor(broker, RULES, {"enabled": False, "weather": {"US": "SPY", "TSEJ": "1306:JP"}})
+    titles = [f.title for f in findings]
+    assert "Simulated broker" in titles and "The gateway accepts orders" in titles
+    assert sum(t.endswith("prices come through") for t in titles) == 5
+    assert any(f.title == "Market-weather index not found" and "1306:JP" in f.detail for f in findings)
+    assert not broker.open_orders()                          # the doctor never orders
+
+
+def test_the_snapshot_carries_the_connection():
+    broker, journal, svc = make()
+    state = svc.cycle()
+    assert state["connection"]["connected"] and state["connection"]["account_type"] == "sim"
+
+
+def test_page_has_collapsible_cards_and_relative_api_paths():
+    from fireplanner.trading.server import render_dashboard
+    page = render_dashboard({})
+    assert 'id="fold-all"' in page and 'id="unfold-all"' in page and "button.fold" in page
+    assert '"/api/' not in page and 'api("api/state")' in page      # works behind /desk/ too

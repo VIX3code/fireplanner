@@ -102,7 +102,9 @@ yourself** — which you want anyway, per risk 1.
 
 ## Option A — Docker Compose (recommended)
 
-Three containers: the gateway (never exposed), the generator, and Caddy for TLS + auth.
+Four containers: the gateway (never exposed), the analysis-site generator, the live Swing Desk
+(guardian + dashboard, see [TRADING.md](TRADING.md#running-it-live-with-ibkr)), and Caddy for
+TLS + auth.
 
 ```bash
 cp deploy/.env.example deploy/.env      # fill in credentials, domain, auth hash
@@ -110,16 +112,23 @@ docker run --rm caddy:2-alpine caddy hash-password   # -> AUTH_HASH
 cd deploy && docker compose up -d
 ```
 
+`https://DOMAIN/` serves the analysis site; `https://DOMAIN/desk/` the live Swing Desk.
+
 Notes on the compose file, all deliberate:
 
-- `ib-gateway` has **no `ports:` mapping** and sits on an `internal: true` network. Exposing
-  4001/4002 to the internet hands over the account — there is no auth on that socket.
-- `READ_ONLY_API: "yes"` blocks order entry at the gateway itself, not just in this code.
-- The generator writes to a shared volume; Caddy mounts it read-only.
+- `ib-gateway` has **no `ports:` mapping**. Exposing its API ports to the internet hands over
+  the account; there is no auth on that socket. It joins two networks: `internal` (to the other
+  containers, no route out) and `egress` (so it can reach IBKR to log in; nothing is published).
+- IB Gateway only accepts connections from its own `127.0.0.1`. The image relays them on
+  **4004 (paper)** and **4003 (live)**, which is what the other containers use (`IB_PORT`).
+- `READ_ONLY_API` defaults to `yes`, which blocks order entry at the gateway itself. The Swing
+  Desk needs `IB_READ_ONLY_API=no` once `trading.enabled` is true.
+- The generator writes to a shared volume; Caddy mounts it read-only. The Swing Desk keeps its
+  journal on the `trading` volume and reads `config/config.yaml` from the repo.
 - A failed refresh **keeps the previous build** rather than blanking the page. The staleness
   banner on the page then tells you the bars are old, which is the honest failure mode.
 
-Start with `IB_MODE=paper` and `IB_PORT=4002`. Move to live only once you have watched it
+Start with `IB_MODE=paper` and `IB_PORT=4004`. Move to live only once you have watched it
 regenerate correctly for a few sessions.
 
 ## Option B — macOS + launchd (for a Mac that already runs TWS)

@@ -1,15 +1,16 @@
 # Caddy fetches and renews a TLS certificate automatically for a real domain.
 #
+#   https://DOMAIN/        the static analysis site (fireplanner publish)
+#   https://DOMAIN/desk/   the live Swing Desk (fireplanner trade run)
+#
 # The auth block is not optional decoration. Even a redacted build publishes your
-# live trading signal; an unredacted one publishes your balance sheet. Pick one of
-# the three approaches below and delete the others.
+# live trading signal; the Swing Desk shows every position and can send orders.
+# Pick one of the three approaches below and delete the others.
 
 {$DOMAIN:localhost} {
-	root * /srv
 	encode gzip
-	file_server
 
-	# ---- Option 1: basic auth (simplest) ---------------------------------
+	# ---- Option 1: basic auth (simplest); covers the site and /desk/ ------
 	# Generate the hash with:  docker run --rm caddy:2-alpine caddy hash-password
 	basic_auth {
 		{$AUTH_USER:admin} {$AUTH_HASH}
@@ -26,15 +27,36 @@
 	# The safest option, and the one to prefer if you are the only reader: bind
 	# this to a Tailscale/WireGuard address and never open 80/443 to the world.
 
+	# ---- the live Swing Desk ---------------------------------------------
+	# The page calls its API with relative paths, so it works under /desk/.
+	redir /desk /desk/
+	handle_path /desk/* {
+		reverse_proxy swing-desk:8765
+		header {
+			# Self-contained page; it only talks back to its own origin.
+			Content-Security-Policy "default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; connect-src 'self'; img-src data:; form-action 'none'; base-uri 'none'; frame-ancestors 'none'"
+			# Live positions and orders: never cached anywhere.
+			Cache-Control "no-store"
+		}
+	}
+
+	# ---- the static analysis site ----------------------------------------
+	handle {
+		root * /srv
+		file_server
+		header {
+			# The pages are fully self-contained, so the policy can be this tight.
+			Content-Security-Policy "default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; img-src data:; font-src data:"
+			# Financial output should never be cached by an intermediary.
+			Cache-Control "private, max-age=300, must-revalidate"
+		}
+	}
+
 	header {
-		# The pages are fully self-contained, so the policy can be this tight.
-		Content-Security-Policy "default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; img-src data:; font-src data:"
 		X-Content-Type-Options nosniff
 		X-Frame-Options DENY
 		Referrer-Policy no-referrer
 		Strict-Transport-Security "max-age=31536000; includeSubDomains"
-		# Financial output should never be cached by an intermediary.
-		Cache-Control "private, max-age=300, must-revalidate"
 	}
 
 	log {

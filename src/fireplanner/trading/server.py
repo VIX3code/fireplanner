@@ -22,8 +22,10 @@ Standard library only. It serves one page and a JSON API:
 
 It binds to 127.0.0.1 by default. To reach it from your phone, put it behind
 the Caddy proxy in ``deploy/`` (TLS + a password) and set a token as well:
-``FIREPLANNER_DASH_TOKEN``. With a token set, every API call must send
-``Authorization: Bearer <token>``; open the page once as ``/?token=...``.
+``FIREPLANNER_DASH_TOKEN``. With a token set, every API call must send it, as
+``X-FP-Token: <token>`` (what the page does, so it can sit behind a proxy's
+basic auth) or ``Authorization: Bearer <token>``; open the page once as
+``/?token=...``.
 
 POST bodies must be JSON. A browser cannot send JSON to another site without
 a CORS preflight, which this server never answers, so a malicious page cannot
@@ -78,8 +80,16 @@ def make_server(service, host: str = "127.0.0.1", port: int = 8765, token: str =
         def _authorised(self) -> bool:
             if not token:
                 return True
-            got = self.headers.get("Authorization", "")
-            return got.startswith("Bearer ") and hmac.compare_digest(got[7:], token)
+            # X-FP-Token from the page (so it can sit behind a proxy's basic auth, which owns the
+            # Authorization header); Bearer from scripts; ?token= only for the CSV download link.
+            got = self.headers.get("X-FP-Token", "")
+            auth = self.headers.get("Authorization", "")
+            if not got and auth.startswith("Bearer "):
+                got = auth[7:]
+            if not got and self.command == "GET" and "?" in self.path:
+                from urllib.parse import parse_qs
+                got = (parse_qs(self.path.split("?", 1)[1]).get("token") or [""])[0]
+            return bool(got) and hmac.compare_digest(got, token)
 
         def do_GET(self):
             path = self.path.split("?", 1)[0]

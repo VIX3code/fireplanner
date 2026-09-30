@@ -217,6 +217,18 @@ td.flags{white-space:normal;min-width:120px;max-width:170px}
 .inline{display:inline-flex;gap:6px;align-items:center}
 .inline input{width:118px;padding:4px 6px;font-size:12.5px}
 h3{font-size:14px;font-weight:600;margin:18px 0 0}
+/* collapsible cards */
+.top-right{display:grid;gap:8px;justify-items:end}
+.foldall{display:flex;gap:6px}
+button.fold{all:unset;box-sizing:border-box;cursor:pointer;display:inline-flex;align-items:center;gap:8px;font:inherit;color:inherit;border-radius:4px}
+button.fold:focus-visible{outline:2px solid var(--b-core);outline-offset:3px}
+button.fold .chev{display:inline-block;width:12px;font-size:11px;color:var(--muted);transition:transform .15s}
+.card.collapsed{padding-block:12px}
+.card.collapsed > :not(:first-child){display:none!important}
+.card.collapsed .chev{transform:rotate(-90deg)}
+.card.collapsed .sec-head p,.card.collapsed .sec-head .filters,.card.collapsed .sec-head form,.card.collapsed .sec-head a{display:none}
+@media (prefers-reduced-motion: reduce){button.fold .chev{transition:none}}
+@media (max-width:600px){.top-right{justify-items:start}}
 .bline{display:grid;grid-template-columns:44px minmax(0,1fr) 34px;gap:6px;align-items:center;font-size:11.5px;color:var(--ink-2)}
 .anchors{margin-top:12px;display:grid;gap:6px}
 .anchors .a{display:grid;grid-template-columns:minmax(0,1fr) auto auto;gap:8px;align-items:center;font-size:13px;padding:6px 10px;border:1px solid var(--line);border-radius:8px;background:var(--inset)}
@@ -230,7 +242,13 @@ h3{font-size:14px;font-weight:600;margin:18px 0 0}
       <h1>Swing Desk</h1>
       <p class="sub">A fixed loss on every trade, a stop on every position, and the book kept in balance</p>
     </div>
-    <div class="tags" id="tags"></div>
+    <div class="top-right">
+      <div class="tags" id="tags"></div>
+      <div class="foldall" role="group" aria-label="All cards">
+        <button type="button" class="btn small ghost" id="fold-all">Collapse all</button>
+        <button type="button" class="btn small ghost" id="unfold-all">Expand all</button>
+      </div>
+    </div>
   </header>
   <div id="banner" class="banner crit" hidden></div>
   <div id="sim-note" class="banner info" hidden>Demo: every position, price, date and index series on this page is simulated by the Swing Desk's own code. It is not market data and not a recommendation.</div>
@@ -355,7 +373,7 @@ h3{font-size:14px;font-weight:600;margin:18px 0 0}
   <section class="card" aria-labelledby="jr-h">
     <div class="sec-head">
       <h2 id="jr-h">Journal</h2>
-      <a class="btn small ghost" id="jr-csv" href="/api/journal.csv" hidden>Download CSV</a>
+      <a class="btn small ghost" id="jr-csv" href="api/journal.csv" hidden>Download CSV</a>
     </div>
     <div class="stats" id="jr-stats"></div>
     <div class="two" style="margin-top:4px">
@@ -456,7 +474,7 @@ let STATE = /*__STATE__*/null;
   // ---- api ----
   async function api(path, body) {
     const headers = { "Content-Type": "application/json" };
-    if (TOKEN) headers["Authorization"] = "Bearer " + TOKEN;
+    if (TOKEN) headers["X-FP-Token"] = TOKEN;
     const r = await fetch(path, { method: body ? "POST" : "GET", headers, body: body ? JSON.stringify(body) : undefined });
     const data = await r.json().catch(() => ({}));
     if (!r.ok) throw new Error(data.error || `HTTP ${r.status}`);
@@ -474,6 +492,15 @@ let STATE = /*__STATE__*/null;
     else if (t.protected === t.open) tags.append(chip("good", "✓", `${t.protected} of ${t.open} positions have a stop`));
     else tags.append(chip("crit", "✕", `${t.open - t.protected} of ${t.open} positions have NO stop`));
     if (s.breaker && s.breaker.paused) tags.append(chip("crit", "■", "New buys paused"));
+    const c = s.connection;
+    if (c && s.mode !== "sim") {
+      if (c.connected) tags.append(chip("good", "●", `IBKR ${c.account_type || s.mode}${c.account ? " · " + c.account : ""}`));
+      else tags.append(chip("crit", "✕", "IBKR disconnected · retrying"));
+    }
+    if (LIVE) {
+      const age = (Date.now() - new Date(s.generated_at).getTime()) / 1000;
+      if (age > 120) tags.append(chip("warn", "!", `No update for ${Math.round(age / 60)} min`));
+    }
     tags.append(el("span", "tag", (LIVE ? "Updated " : "Snapshot ") + new Date(s.generated_at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })));
     $("sim-note").hidden = s.mode !== "sim";
     if (!LIVE && s.generated_at) document.title = `Swing Desk · ${new Date(s.generated_at).toLocaleDateString("en-GB", { day: "numeric", month: "short" })}`;
@@ -532,12 +559,12 @@ let STATE = /*__STATE__*/null;
     b.reasons.forEach(x => box.append(el("p", "msg err", x)));
     const acts = $("brk-acts"); acts.replaceChildren();
     const act = (label, path, cls) => btn(label, cls, async () => { if (!LIVE) return snapshotOnly("brk-msg"); try { const res = await api(path, {}); say("brk-msg", res.message, true); refresh(); } catch (e) { say("brk-msg", e.message, false); } });
-    if (b.paused) acts.append(act("Resume buys", "/api/resume", ""));
-    else acts.append(act("Pause buys", "/api/pause"));
+    if (b.paused) acts.append(act("Resume buys", "api/resume", ""));
+    else acts.append(act("Pause buys", "api/pause"));
     const kill = btn("Kill switch", "danger", () => {
       if (!LIVE) return snapshotOnly("brk-msg");
       acts.replaceChildren(el("span", null, "Cancel every working buy order and pause buys? Stops stay."),
-        act("Yes, kill", "/api/kill", "danger"), btn("Cancel", "ghost", () => renderBreaker(STATE)));
+        act("Yes, kill", "api/kill", "danger"), btn("Cancel", "ghost", () => renderBreaker(STATE)));
     });
     acts.append(kill);
   }
@@ -668,7 +695,7 @@ let STATE = /*__STATE__*/null;
       const sellB = btn("Sell", "ghost", () => {
         if (!LIVE) return snapshotOnly("book-msg");
         confirmRow(acts, `Sell all ${p.qty} ${p.symbol} now?`, "Sell", async () => {
-          try { const r = await api("/api/exit", { key: p.key }); say("book-msg", r.message, r.ok); refresh(); } catch (e) { say("book-msg", e.message, false); }
+          try { const r = await api("api/exit", { key: p.key }); say("book-msg", r.message, r.ok); refresh(); } catch (e) { say("book-msg", e.message, false); }
         });
       }, p.exit_working);
       w.append(addB, sellB); acts.append(w);
@@ -687,7 +714,7 @@ let STATE = /*__STATE__*/null;
       if (x.locked) {
         c = el("span", "rowacts");
         c.append(chip("crit", "✕", x.manual ? "Locked" : `Locked · unlocks ${fmtDate(x.unlocks_on)}`));
-        c.append(btn("Unlock", "ghost", async () => { if (!LIVE) return; try { await api("/api/unlock", { key: x.key }); refresh(); } catch (e) {} }, !LIVE));
+        c.append(btn("Unlock", "ghost", async () => { if (!LIVE) return; try { await api("api/unlock", { key: x.key }); refresh(); } catch (e) {} }, !LIVE));
       } else c = chip("warn", "▲", x.held ? "Last try · held" : `${x.tries_left} try left`);
       const detail = x.locked ? `Stopped out ${s.rules.max_strikes} times in a row, last on ${fmtDate(x.last_exit)}. ${x.manual ? "Stays locked until you unlock it." : ""}` : `Stopped out on ${fmtDate(x.last_exit)} (${sPct(x.last_result)}). The next stop-out locks it.`;
       li.append(who, c, el("div", "what", detail)); box.append(li);
@@ -747,6 +774,7 @@ let STATE = /*__STATE__*/null;
       tb.append(tr);
     });
     $("jr-csv").hidden = !LIVE;
+    $("jr-csv").href = "api/journal.csv" + (TOKEN ? "?token=" + encodeURIComponent(TOKEN) : "");
   }
 
   // ---- watchlist ----
@@ -773,18 +801,18 @@ let STATE = /*__STATE__*/null;
       if (w.earnings) earn.append(chip(w.earnings.days <= s.rules.earnings_warn_days ? "warn" : "info", "E", `${fmtDate(w.earnings.date)} · ${w.earnings.days}d`));
       if (LIVE) {
         const inp = el("input"); inp.type = "date"; inp.setAttribute("aria-label", `Earnings date for ${w.key}`); if (w.earnings) inp.value = w.earnings.date;
-        inp.addEventListener("change", async () => { try { const r = await api("/api/earnings", { key: w.key, date: inp.value || "" }); say("wl-msg", r.message, true); refresh(); } catch (e) { say("wl-msg", e.message, false); } });
+        inp.addEventListener("change", async () => { try { const r = await api("api/earnings", { key: w.key, date: inp.value || "" }); say("wl-msg", r.message, true); refresh(); } catch (e) { say("wl-msg", e.message, false); } });
         earn.append(inp);
       } else if (!w.earnings) earn.append(el("span", "small", "—"));
       let status;
       if (w.error) status = chip("crit", "✕", "Not found");
-      else if (w.locked) { status = el("span", "rowacts"); status.append(chip("crit", "✕", w.manual_lock ? "Locked" : `Locked · ${fmtDate(w.unlocks_on)}`)); status.append(btn("Unlock", "ghost", async () => { try { await api("/api/unlock", { key: w.key }); refresh(); } catch (e) { say("wl-msg", e.message, false); } }, !LIVE)); }
+      else if (w.locked) { status = el("span", "rowacts"); status.append(chip("crit", "✕", w.manual_lock ? "Locked" : `Locked · ${fmtDate(w.unlocks_on)}`)); status.append(btn("Unlock", "ghost", async () => { try { await api("api/unlock", { key: w.key }); refresh(); } catch (e) { say("wl-msg", e.message, false); } }, !LIVE)); }
       else if (w.held) status = chip("info", "●", "Held");
       else if (w.tries_left < s.rules.max_strikes) status = chip("warn", "▲", "Last try");
       else status = chip("good", "✓", "Ready");
       const btns = el("span", "rowacts");
       btns.append(btn("Check", "ghost", () => { $("gate-sym").value = w.key; $("gate-bucket").value = ""; $("gate-limit").value = ""; runCheck(false); $("gate-h").scrollIntoView({ behavior: "smooth", block: "start" }); }));
-      btns.append(btn("Remove", "ghost", async () => { try { const r = await api("/api/unwatch", { key: w.key }); say("wl-msg", r.message, true); refresh(); } catch (e) { say("wl-msg", e.message, false); } }, !LIVE));
+      btns.append(btn("Remove", "ghost", async () => { try { const r = await api("api/unwatch", { key: w.key }); say("wl-msg", r.message, true); refresh(); } catch (e) { say("wl-msg", e.message, false); } }, !LIVE));
       tr.append(td(name), td(last), td(avwapCell(w)), td(typ), td(earn), td(status), td(btns));
       tb.append(tr);
     });
@@ -802,13 +830,13 @@ let STATE = /*__STATE__*/null;
     if (!av.pullback && !below.length) d.append(el("span", "small", "—"));
     return d;
   }
-  async function setBucket(key, bucket) { try { const r = await api("/api/bucket", { key, bucket }); say("wl-msg", r.message, true); refresh(); } catch (e) { say("wl-msg", e.message, false); } }
+  async function setBucket(key, bucket) { try { const r = await api("api/bucket", { key, bucket }); say("wl-msg", r.message, true); refresh(); } catch (e) { say("wl-msg", e.message, false); } }
   $("wl-form").addEventListener("submit", async e => {
     e.preventDefault();
     if (!LIVE) return snapshotOnly("wl-msg");
     const symbol = $("wl-sym").value.trim(); if (!symbol) return;
     const lot = parseInt($("wl-lot").value, 10);
-    try { const r = await api("/api/watch", { symbol, lot_size: Number.isFinite(lot) ? lot : null }); say("wl-msg", r.message, true); $("wl-sym").value = ""; $("wl-lot").value = ""; refresh(); }
+    try { const r = await api("api/watch", { symbol, lot_size: Number.isFinite(lot) ? lot : null }); say("wl-msg", r.message, true); $("wl-sym").value = ""; $("wl-lot").value = ""; refresh(); }
     catch (err) { say("wl-msg", err.message, false); }
   });
 
@@ -834,7 +862,7 @@ let STATE = /*__STATE__*/null;
     if (!LIVE) return snapshotOnly("set-msg");
     const body = {};
     $("set-form").querySelectorAll("input").forEach(i => { const v = parseFloat(i.value); if (Number.isFinite(v)) body[i.name] = v / Number(i.dataset.scale); });
-    try { const r = await api("/api/settings", body); say("set-msg", r.message, true); settingsDrawn = false; refresh(); } catch (err) { say("set-msg", err.message, false); }
+    try { const r = await api("api/settings", body); say("set-msg", r.message, true); settingsDrawn = false; refresh(); } catch (err) { say("set-msg", err.message, false); }
   });
 
   // ---- gate ----
@@ -884,8 +912,8 @@ let STATE = /*__STATE__*/null;
         yes.disabled = true; no.disabled = true;
         try {
           const r = res.is_add
-            ? await api("/api/add", { key: inst.key, limit: p.limit, expect_qty: p.qty })
-            : await api("/api/enter", { symbol: inst.key, bucket: $("gate-bucket").value || p.bucket, limit: p.limit, expect_qty: p.qty, setup: $("gate-setup").value, note: $("gate-note").value });
+            ? await api("api/add", { key: inst.key, limit: p.limit, expect_qty: p.qty })
+            : await api("api/enter", { symbol: inst.key, bucket: $("gate-bucket").value || p.bucket, limit: p.limit, expect_qty: p.qty, setup: $("gate-setup").value, note: $("gate-note").value });
           renderGate(r.check || res); $("gate-out").append(el("p", "msg " + (r.ok ? "ok" : "err"), r.message)); refresh();
         } catch (e) { renderGate(res); $("gate-out").append(el("p", "msg err", e.message)); }
       });
@@ -904,7 +932,7 @@ let STATE = /*__STATE__*/null;
       return;
     }
     $("gate-go").disabled = true; renderGate(null, "Checking with IBKR…", true);
-    try { renderGate(await api("/api/check", { symbol, bucket, limit, add: !!isAdd })); }
+    try { renderGate(await api("api/check", { symbol, bucket, limit, add: !!isAdd })); }
     catch (e) { renderGate(null, e.message, false); }
     finally { $("gate-go").disabled = false; }
   }
@@ -931,7 +959,32 @@ let STATE = /*__STATE__*/null;
     renderHeader(s); renderKpis(s); renderWeather(s); renderBreaker(s); renderMix(s); renderFilters(s); renderRows(s);
     renderStrikes(s); renderFeed(s); renderJournal(s); renderWatch(s); renderSettings(s); renderNotes(s);
   }
-  async function refresh() { try { render(await api("/api/state")); } catch (e) { const b = $("banner"); b.textContent = "Can't reach the trading service: " + e.message; b.hidden = false; } }
+  async function refresh() { try { render(await api("api/state")); } catch (e) { const b = $("banner"); b.textContent = "Can't reach the trading service: " + e.message; b.hidden = false; } }
+
+  // ---- collapsible cards (remembered per browser) ----
+  const FOLD_KEY = "fp-folded";
+  let folded = {};
+  try { folded = JSON.parse(localStorage.getItem(FOLD_KEY) || "{}") || {}; } catch (e) { folded = {}; }
+  const cards = [...document.querySelectorAll("section.card")];
+  const saveFolds = () => { try { localStorage.setItem(FOLD_KEY, JSON.stringify(folded)); } catch (e) {} };
+  function setFold(card, on) {
+    card.classList.toggle("collapsed", on);
+    const b = card.querySelector("button.fold");
+    if (b) { b.setAttribute("aria-expanded", String(!on)); b.title = on ? "Expand" : "Collapse"; }
+    folded[card.dataset.fold] = on;
+    if (!on) requestAnimationFrame(fitLabels);
+  }
+  cards.forEach(card => {
+    const h2 = card.querySelector("h2"); if (!h2) return;
+    card.dataset.fold = card.getAttribute("aria-labelledby") || h2.id;
+    const b = el("button", "fold"); b.type = "button";
+    b.append(el("span", "chev", "▾"), document.createTextNode(h2.textContent));
+    h2.replaceChildren(b);
+    b.addEventListener("click", () => { setFold(card, !card.classList.contains("collapsed")); saveFolds(); });
+    setFold(card, !!folded[card.dataset.fold]);
+  });
+  $("fold-all").addEventListener("click", () => { cards.forEach(c => setFold(c, true)); saveFolds(); });
+  $("unfold-all").addEventListener("click", () => { cards.forEach(c => setFold(c, false)); saveFolds(); });
 
   render(STATE);
   if (LIVE) { refresh(); setInterval(refresh, 5000); }

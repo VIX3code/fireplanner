@@ -162,6 +162,12 @@ class SimBroker:
         # moves with prices and orders.
         time.sleep(min(seconds, 0.05))
 
+    def status(self) -> dict:
+        return {"broker": "Simulator", "connected": True, "account": "SIM", "account_type": "sim"}
+
+    def orders_allowed(self) -> tuple[bool | None, str]:
+        return True, "Simulated orders are always accepted."
+
     def pop_dirty(self) -> bool:
         d, self.dirty = self.dirty, False
         return d

@@ -425,6 +425,31 @@ def cmd_trade_demo(args) -> int:
     return 0
 
 
+def cmd_trade_doctor(args) -> int:
+    """Check the IBKR connection is ready for the Swing Desk. Places no orders."""
+    from .trading import load_rules, load_settings
+    from .trading.doctor import run_doctor
+    from .trading.ib_broker import IBBroker
+
+    rules, settings = load_rules(args.config), load_settings(args.config)
+    broker = IBBroker(host=args.host, port=args.port,
+                      client_id=args.trade_client_id or settings["guardian"]["client_id"] + 1,
+                      allow_live=bool(settings["allow_live"]), rules=rules, lot_sizes=settings["lot_sizes"])
+    try:
+        findings = run_doctor(broker, rules, settings)
+    finally:
+        broker.disconnect()
+    mark = {"good": "ok ", "warn": "!! ", "crit": "XX ", "info": " i "}
+    print(f"\n  Swing Desk doctor: IBKR at {args.host}:{args.port}\n")
+    for f in findings:
+        print(f"  {mark[f.level]} {f.title}")
+        if f.detail:
+            print(f"       {f.detail}")
+    bad = [f for f in findings if f.level == "crit"]
+    print(f"\n  {'Ready.' if not bad else f'{len(bad)} problem(s) to fix before running the guardian.'}\n")
+    return 1 if bad else 0
+
+
 def cmd_trade_snapshot(args) -> int:
     """One self-contained HTML file of your real dashboard, to host behind a password."""
     import os
@@ -635,6 +660,10 @@ def main(argv=None) -> int:
     p = trade_parser("demo", "write the dashboard for a simulated book (no IBKR needed)", cmd_trade_demo)
     p.add_argument("-o", "--output", default="swing_desk.html")
     p.add_argument("--print", action="store_true", help="also print the book")
+
+    p = trade_parser("doctor", "check the IBKR connection is ready (places no orders)", cmd_trade_doctor)
+    p.add_argument("--trade-client-id", type=int, default=0,
+                   help="client id for the check (default: the guardian's + 1, so it can run alongside)")
 
     p = trade_parser("snapshot", "write your real dashboard as one HTML file to host", cmd_trade_snapshot)
     broker_opts(p)

@@ -507,8 +507,15 @@ class TradingService:
             "earnings_online": self.earnings.online,
             "journal": {"stats": journal_stats(closed, now), "trades": recent},
             "events": journal.events(40),
+            "connection": self.connection(),
             "error": self.last_error,
         }
+
+    def connection(self) -> dict:
+        try:
+            return self.broker.status()
+        except Exception as exc:
+            return {"broker": "IBKR", "connected": False, "error": str(exc)}
 
     def snapshot(self) -> dict:
         with self._lock:
@@ -767,7 +774,7 @@ class TradingService:
             except Exception as exc:
                 self.last_error = str(exc)
                 with self._lock:
-                    self._state = {**self._state, "error": self.last_error}
+                    self._state = {**self._state, "error": self.last_error, "connection": self.connection()}
                 self.emit("crit", "cycle-failed", f"Guardian cycle failed: {exc}", once=True)
             deadline = time.monotonic() + interval
             while not stop.is_set() and time.monotonic() < deadline:

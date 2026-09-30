@@ -87,25 +87,60 @@ guide only warns.
 
 ---
 
-## Getting started, paper first
+## Running it live with IBKR
 
-1. **Look at the demo.** `fireplanner trade demo -o swing_desk.html` runs a sample book
-   through the real code on a simulated broker. Nothing about it is drawn by hand.
-2. **Paper account, orders off.** In IB Gateway (paper, port 4002) turn **off**
-   *Configure → Settings → API → Read-Only API*, since the guardian has to place orders. Then:
+The dashboard has two modes. `trade demo` and `trade snapshot` write a static page. **`trade run`
+is live**: it holds a connection to TWS or IB Gateway all day, runs the guardian every 30
+seconds (at once on a fill), and serves a dashboard that refreshes every 5 seconds and can check
+trades, send buys and adds, sell, pause and unlock.
+
+### On your own computer
+
+1. **Log in to TWS or IB Gateway** with your **paper** account. Under *Configure → Settings →
+   API → Settings*: tick *Enable ActiveX and Socket Clients*, add `127.0.0.1` to trusted IPs,
+   and note the port (7497 TWS paper, 4002 Gateway paper).
+2. **Install and check the connection:**
    ```bash
    pip install -e ".[gateway]"
-   fireplanner --port 4002 trade once --dry-run
+   fireplanner --port 7497 trade doctor
    ```
-   Every position is listed with the stop and target the guardian *would* place.
-3. **Run it in dry run for a few days:** `fireplanner --port 4002 trade run`. With
-   `trading.enabled: false` (the default) every order is logged on the dashboard as
-   "Dry run, not sent". Buy a few things on paper and watch what it would do.
-4. **Turn orders on, still on paper:** set `trading.enabled: true`. Now stops and targets are
-   placed for real on the paper account. Test a buy from the dashboard, one from TWS, and one
-   from the IBKR phone app; cancel a stop by hand and watch it come back.
-5. **Live.** Only after the paper checklist below passes: set `trading.allow_live: true` and use
-   port 4001. Without that flag, live ports are refused at startup.
+   The doctor connects, reads the account id (paper accounts start with "D"), checks whether
+   the gateway accepts orders (with a what-if order that can't trade), reads positions and cash,
+   gets a price in each of the five markets, and finds daily history, exchange rates and the
+   weather indexes. It places no orders, and says what to fix.
+3. **Start it:** `fireplanner --port 7497 trade run`, then open **http://127.0.0.1:8765**. The
+   header shows *IBKR paper · DU•••1234* when connected, and turns red if the connection drops;
+   the guardian keeps retrying. Orders stay in **dry run** until `trading.enabled: true`.
+
+### Always on, reachable from your phone (Docker)
+
+`deploy/docker-compose.yml` runs IB Gateway, the guardian with its dashboard, and Caddy for HTTPS
+and a password. The dashboard is at **https://your-domain/desk/**.
+
+```bash
+cp deploy/.env.example deploy/.env        # IBKR login, domain, password hash, dashboard token
+docker run --rm caddy:2-alpine caddy hash-password          # -> AUTH_HASH
+cd deploy && docker compose up -d
+docker compose exec swing-desk fireplanner --host ib-gateway --port 4004 trade doctor
+```
+
+Then open `https://your-domain/desk/?token=<FIREPLANNER_DASH_TOKEN>` once: the browser asks for
+the password, and the page remembers the token for the session. Nothing but Caddy has a public
+port; the gateway and the dashboard are only reachable through it. IBKR asks for a daily
+re-login, and most accounts need 2FA: approve it on your phone when IB Gateway restarts.
+
+### Paper first, then live
+
+1. **Dry run on paper** (the default) for a few days. Every order the guardian would place
+   shows as "Dry run, not sent" in Activity. Buy a few things on paper and watch it.
+2. **Orders on, still on paper:** set `trading.enabled: true` (and, in Docker,
+   `IB_READ_ONLY_API=no`). Stops and targets are now placed on the paper account. Test a buy from
+   the dashboard, one from TWS and one from the IBKR app; cancel a stop by hand and watch it
+   come back.
+3. **Live**, only after the checklist below passes: set `trading.allow_live: true`, log the
+   gateway in to the live account and use the live port (7496 TWS, 4001 Gateway, 4003 Docker).
+   Without that flag the guardian refuses a live **port**, and refuses a live **account** on any
+   port: it reads the account id when it connects, so a mislabelled port can't slip through.
 
 ### Check these on paper before going live
 

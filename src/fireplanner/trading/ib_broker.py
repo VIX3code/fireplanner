@@ -2,12 +2,15 @@
 
 Safety rails, all on by default:
 
-* **Paper unless told otherwise.** Ports 4002 (Gateway) and 7497 (TWS) are
-  paper accounts. A live port (4001, 7496) is refused unless the config says
-  ``trading.allow_live: true``.
+* **Paper unless told otherwise.** Ports 4002 (Gateway), 7497 (TWS) and 4004
+  (the Docker image's relay) are paper. A live port (4001, 7496, 4003) is
+  refused unless the config says ``trading.allow_live: true``.
+* **The account decides, not the port.** Ports are just settings in TWS, so on
+  connecting the adapter reads the account id: paper accounts start with "D"
+  (DU..., DF...). A live account behind a "paper" port is refused the same way.
 * **The gateway itself must allow orders.** IB Gateway's *Read-Only API*
-  setting blocks every order. The deploy stack ships it on; turning it off is a
-  deliberate step for the day you are ready to trade.
+  setting blocks every order. `orders_allowed` checks it without placing one,
+  and ``fireplanner trade doctor`` reports it.
 * **One client id for the guardian.** IBKR only lets the client that placed an
   order modify it. Keep ``client_id`` fixed so a restarted guardian can still
   move its own stops.
@@ -30,10 +33,22 @@ from .broker import BrokerFill, BrokerOrder, BrokerPosition, CashView, OrderSpec
 from .markets import MARKETS, Instrument, detect_inverse
 from .rules import TradingRules
 
-__all__ = ["IBBroker", "PAPER_PORTS", "LIVE_PORTS", "market_for"]
+__all__ = ["IBBroker", "LiveAccountRefused", "PAPER_PORTS", "LIVE_PORTS", "market_for", "mask_account"]
 
-PAPER_PORTS = {4002, 7497}
-LIVE_PORTS = {4001, 7496}
+
+class LiveAccountRefused(ValueError):
+    """Connected to a live account without ``trading.allow_live``."""
+
+
+def mask_account(acct: str) -> str:
+    return f"{acct[:2]}•••{acct[-4:]}" if acct and len(acct) > 6 else acct or ""
+
+
+def is_paper_account(acct: str) -> bool:
+    return bool(acct) and acct.upper().startswith("D")
+
+PAPER_PORTS = {4002, 7497, 4004}
+LIVE_PORTS = {4001, 7496, 4003}
 _ACTIVE = {"PendingSubmit", "ApiPending", "PreSubmitted", "Submitted"}
 _US_PRIMARY = ("NASDAQ", "NYSE", "ARCA", "AMEX", "BATS", "NYSEARCA")
 # Forex pairs IBKR quotes, and whether the quote is USD per unit (else units per USD).
@@ -79,7 +94,9 @@ class IBBroker:
                 f"Port {port} is a LIVE trading port. The guardian runs on paper (4002 / 7497) until "
                 f"trading.allow_live is set to true in config.yaml.")
         self.host, self.port, self.client_id, self.account = host, port, client_id, account
+        self.allow_live = allow_live
         self.mode = "live" if port in LIVE_PORTS else "paper"
+        self.accounts: list[str] = []
         self.rules = rules or TradingRules()
         self.lot_sizes = {str(k).upper(): int(v) for k, v in (lot_sizes or {}).items()}
         self._ib = None
@@ -104,6 +121,15 @@ class IBBroker:
             raise ImportError("The trade manager needs ib_async: pip install 'fireplanner[gateway]'") from exc
         ib = IB()
         ib.connect(self.host, self.port, clientId=self.client_id, readonly=False, account=self.account)
+        accounts = [a for a in (ib.managedAccounts() or []) if a]
+        mine = [self.account] if self.account else accounts
+        live = any(not is_paper_account(a) for a in mine)
+        if live and not self.allow_live:
+            ib.disconnect()
+            raise LiveAccountRefused(
+                f"Connected to a LIVE account ({', '.join(mask_account(a) for a in mine)}) on port {self.port}. "
+                f"The guardian stays on paper until trading.allow_live is set to true in config.yaml.")
+        self.accounts, self.mode = accounts, ("live" if live else "paper")
         ib.reqMarketDataType(4)
         ib.execDetailsEvent += self._on_exec
         ib.orderStatusEvent += self._on_status
@@ -114,6 +140,50 @@ class IBBroker:
     def disconnect(self) -> None:
         if self._ib is not None and self._ib.isConnected():
             self._ib.disconnect()
+
+    @property
+    def connected(self) -> bool:
+        return self._ib is not None and self._ib.isConnected()
+
+    def status(self) -> dict:
+        """For the dashboard: is the socket up, and which account is this."""
+        acct = self.account or (self.accounts[0] if self.accounts else "")
+        return {"broker": "IBKR", "connected": self.connected, "host": self.host, "port": self.port,
+                "client_id": self.client_id, "account": mask_account(acct),
+                "account_type": self.mode, "accounts": len(self.accounts)}
+
+    def orders_allowed(self) -> tuple[bool | None, str]:
+        """Whether the gateway accepts orders, found with a what-if order that can't execute.
+
+        IB Gateway's Read-Only API setting rejects every order request with error
+        321; a what-if order is one, but it is never sent to an exchange.
+        """
+        from ib_async import LimitOrder, Stock
+
+        ib = self.connect()
+        errors: list[tuple[int, str]] = []
+
+        def on_error(req_id, code, msg, *rest):
+            errors.append((int(code), str(msg)))
+
+        contract = Stock("SPY", "SMART", "USD")
+        ib.qualifyContracts(contract)
+        order = LimitOrder("BUY", 1, 1.00)          # far below the market; what-if never trades anyway
+        if self.account:
+            order.account = self.account
+        ib.errorEvent += on_error
+        try:
+            state = ib.whatIfOrder(contract, order)
+        except Exception as exc:
+            errors.append((0, str(exc)))
+            state = None
+        finally:
+            ib.errorEvent -= on_error
+        if any(code == 321 or "read-only" in msg.lower() for code, msg in errors):
+            return False, "The gateway's Read-Only API setting is on: every order would be rejected."
+        if state is not None and getattr(state, "initMarginChange", ""):
+            return True, "Orders are accepted (checked with a what-if order, nothing was sent)."
+        return None, "Couldn't tell: " + ("; ".join(m for _, m in errors[:2]) or "no answer to the what-if order")
 
     def _on_exec(self, *_):
         self.dirty = True
