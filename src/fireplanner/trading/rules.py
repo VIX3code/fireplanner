@@ -272,6 +272,9 @@ DEFAULT_SETTINGS = {
     "dashboard": {"host": "127.0.0.1", "port": 8765},
     "watchlist": [],
     "lot_sizes": {},
+    # On the first run, positions already in the account are left alone (no stop, no target)
+    # until you choose Manage on the dashboard. true: take them all over from the start.
+    "manage_existing": False,
     # Index proxy per market for the market-weather check. US also uses VIX,
     # RSP (breadth) and VIX3M; the others use trend and drawdown of the proxy.
     "weather": {"US": "SPY", "LSE": "ISF:LN", "SEHK": "2800:HK", "SGX": "ES3:SG", "TSEJ": "1306:JP"},

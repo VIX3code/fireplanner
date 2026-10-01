@@ -137,10 +137,55 @@ re-login, and most accounts need 2FA: approve it on your phone when IB Gateway r
    `IB_READ_ONLY_API=no`). Stops and targets are now placed on the paper account. Test a buy from
    the dashboard, one from TWS and one from the IBKR app; cancel a stop by hand and watch it
    come back.
-3. **Live**, only after the checklist below passes: set `trading.allow_live: true`, log the
-   gateway in to the live account and use the live port (7496 TWS, 4001 Gateway, 4003 Docker).
-   Without that flag the guardian refuses a live **port**, and refuses a live **account** on any
-   port: it reads the account id when it connects, so a mislabelled port can't slip through.
+3. **Live**: see the next section.
+
+## Switching to your live account
+
+The live account uses the same code and the same rules; only three settings and a login change.
+Do it in two steps, so the first real-money session sends nothing.
+
+**Before you start, in TWS / IB Gateway (logged in to the live account)**
+
+- *Configure → Settings → API → Settings*: tick *Enable ActiveX and Socket Clients*, **untick
+  Read-Only API**, add `127.0.0.1` to trusted IPs. The live port is 7496 (TWS) or 4001 (Gateway).
+- *API → Precautions*: tick **Bypass Order Precautions for API Orders**. Otherwise TWS may hold a
+  stop behind a confirmation pop-up that nobody is there to click.
+- Market-data subscriptions for the exchanges you trade, so the ratchet and sizing get prices.
+
+**Step 1: live account, nothing sent.** In `config/config.yaml`:
+
+```yaml
+trading:
+  allow_live: true        # connect to the live account
+  enabled: false          # but log orders instead of sending them
+```
+
+```bash
+fireplanner --port 7496 trade doctor      # 4001 for IB Gateway
+fireplanner --port 7496 trade run
+```
+
+The header turns red: *LIVE ACCOUNT · IBKR live · U•••1234*. On this first run, **every position
+already in the account is left alone**: it appears under *Not managed*, with no stop and no
+target, and this system will never sell it. For each one you want protected by the 5% /
+2.5 × range stop and the target, press **Manage** (it starts from your average cost; a stock
+already below that stop gets a protective stop under the market instead, and an alert). Watch
+Activity for a day: every order the guardian would place is listed as "Dry run, not sent".
+
+**Step 2: orders on.** Set `enabled: true` and restart. The header shows *Real orders ON*, and the
+confirm buttons read *Confirm LIVE buy*. Then:
+
+- Make the first trade small: set the fixed loss to $50 in Settings for the first few trades.
+- After the first fill, check in TWS that the stop and target are there, GTC, with the order
+  reference `fp:stop:…` / `fp:target:…`, and in one OCA group.
+- Remember the kill switch (*Circuit breakers*): it cancels working buys and pauses new ones,
+  leaving every stop in place. **Release** on a position stops managing it.
+
+**In Docker** the same two steps are `IB_MODE=live`, `IB_PORT=4003`, `IB_READ_ONLY_API=no` in
+`deploy/.env`, plus `allow_live` / `enabled` in `config/config.yaml`.
+
+**What changes nothing:** stops are stop orders, so a gap (earnings, news overnight) fills below
+them. The fixed loss is a plan, not a guarantee.
 
 ### Check these on paper before going live
 

@@ -128,7 +128,8 @@ backtest:
 # ---------------------------------------------------------------------------
 trading:
   enabled: false              # false = dry run: every order is logged, none is sent
-  allow_live: false           # refuse the live ports (4001 / 7496) until true
+  allow_live: false           # refuse a live port or live account until true
+  manage_existing: false      # first run: leave holdings already in the account alone (Manage them on the dashboard)
   journal: data/trading/journal.sqlite   # trade history; keep it, never commit it
   guardian:
     client_id: 23             # fixed, so a restarted guardian can still move its own stops

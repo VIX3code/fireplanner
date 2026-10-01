@@ -319,6 +319,23 @@ button.fold .chev{display:inline-block;width:12px;font-size:11px;color:var(--mut
     </div>
   </section>
 
+  <section class="card" aria-labelledby="um-h" id="um-card" hidden>
+    <div class="sec-head">
+      <h2 id="um-h">Not managed</h2>
+      <span class="small">Holdings the guardian leaves alone: no stop, no target, never sold by this system</span>
+    </div>
+    <p class="msg" id="um-msg" hidden></p>
+    <div class="table-wrap">
+      <table style="min-width:640px">
+        <thead><tr>
+          <th scope="col">Stock</th><th scope="col">Shares</th><th scope="col">Average cost</th>
+          <th scope="col">Last</th><th scope="col">Value</th><th scope="col">Why</th><th scope="col"></th>
+        </tr></thead>
+        <tbody id="um-rows"></tbody>
+      </table>
+    </div>
+  </section>
+
   <div class="two">
     <section class="card" aria-labelledby="gate-h">
       <h2 id="gate-h">Check a new trade</h2>
@@ -486,7 +503,8 @@ let STATE = /*__STATE__*/null;
   function renderHeader(s) {
     const tags = $("tags"); tags.replaceChildren();
     tags.append(el("span", "tag" + (s.mode === "live" ? " live" : ""), s.mode === "live" ? "LIVE ACCOUNT" : s.mode === "paper" ? "Paper account" : "Simulated"));
-    tags.append(el("span", "tag", s.orders_enabled ? "Orders on" : "Dry run · orders off"));
+    if (s.mode === "live" && s.orders_enabled) tags.append(chip("crit", "■", "Real orders ON"));
+    else tags.append(el("span", "tag", s.orders_enabled ? "Orders on" : "Dry run · orders off"));
     const t = s.totals;
     if (t.open === 0) tags.append(chip("info", "·", "No open positions"));
     else if (t.protected === t.open) tags.append(chip("good", "✓", `${t.protected} of ${t.open} positions have a stop`));
@@ -511,7 +529,7 @@ let STATE = /*__STATE__*/null;
   function renderKpis(s) {
     const t = s.totals, r = s.rules, box = $("kpis"); box.replaceChildren();
     const k = [
-      { label: "Positions", value: `${t.slots_used} of ${t.max_slots}`, note: `${usd(r.risk_per_trade_usd)} fixed loss per trade` },
+      { label: "Positions", value: `${t.slots_used} of ${t.max_slots}`, note: `${usd(r.risk_per_trade_usd)} fixed loss per trade${(s.unmanaged || []).length ? ` · ${s.unmanaged.length} left alone` : ""}` },
       { label: "Invested now", value: usd(t.invested_usd), note: `of ${usd(r.max_invested_usd)} limit${t.cash_usd != null ? ` · ${usd(t.cash_usd)} cash` : ""}` },
       { label: "Open profit / loss", value: sUsd(t.pl_usd), cls: t.pl_usd >= 0 ? "up" : "down", note: `${sPct(t.pl_pct)} on cost` },
       { label: "Lost if every stop hits", value: usd(t.risk_usd), note: `of ${usd(r.max_open_risk_usd)} limit · ${t.moved} stop${t.moved === 1 ? "" : "s"} at or above entry` },
@@ -694,12 +712,42 @@ let STATE = /*__STATE__*/null;
       addB.title = p.can_add ? "Add a second position sized for the same fixed loss" : p.add_problem;
       const sellB = btn("Sell", "ghost", () => {
         if (!LIVE) return snapshotOnly("book-msg");
-        confirmRow(acts, `Sell all ${p.qty} ${p.symbol} now?`, "Sell", async () => {
+        confirmRow(acts, `Sell all ${p.qty} ${p.symbol} now${STATE.mode === "live" ? " (LIVE account)" : ""}?`, STATE.mode === "live" ? "Sell (live)" : "Sell", async () => {
           try { const r = await api("api/exit", { key: p.key }); say("book-msg", r.message, r.ok); refresh(); } catch (e) { say("book-msg", e.message, false); }
         });
       }, p.exit_working);
-      w.append(addB, sellB); acts.append(w);
+      const relB = btn("Release", "ghost", () => {
+        if (!LIVE) return snapshotOnly("book-msg");
+        confirmRow(acts, `Stop managing ${p.symbol}? Its stop and target are cancelled.`, "Release", async () => {
+          try { const r = await api("api/release", { key: p.key }); say("book-msg", r.message, r.ok); refresh(); } catch (e) { say("book-msg", e.message, false); }
+        });
+      });
+      relB.title = "Stop managing this position: cancel this system's stop and target on it";
+      w.append(addB, sellB, relB); acts.append(w);
       tr.append(td(name), td(String(p.qty)), td(px(p.entry, p.decimals)), td(last), td(pl), td(stop), td(tgt), td(track(p)), td(flags, "flags"), td(String(p.days)), acts);
+      tb.append(tr);
+    });
+  }
+
+  // ---- holdings left alone ----
+  function renderUnmanaged(s) {
+    const list = s.unmanaged || [];
+    $("um-card").hidden = !list.length;
+    const tb = $("um-rows"); tb.replaceChildren();
+    list.forEach(u => {
+      const tr = el("tr");
+      const td = (child, cls) => { const c = el("td", cls); if (child instanceof Node) c.append(child); else c.textContent = child; return c; };
+      const name = el("div"); name.append(el("span", "tick", u.symbol), el("span", "small", `${MARKET_SHORT[u.market] || u.market}${u.name ? " · " + u.name : ""}`));
+      const acts = el("td");
+      const m = btn("Manage", "ghost", () => {
+        if (!LIVE) return snapshotOnly("um-msg");
+        confirmRow(acts, `Put a GTC stop and target on ${u.qty} ${u.symbol}, from its average cost?`, "Manage", async () => {
+          try { const r = await api("api/adopt", { key: u.key }); say("um-msg", r.message, r.ok); refresh(); } catch (e) { say("um-msg", e.message, false); }
+        });
+      });
+      acts.append(m);
+      tr.append(td(name), td(String(u.qty)), td(px(u.avg_cost, u.decimals)), td(px(u.last, u.decimals)),
+        td(u.value_usd != null ? usd(u.value_usd) : "—"), td(u.reason === "released" ? "Released by you" : "Held before the guardian started"), acts);
       tb.append(tr);
     });
   }
@@ -907,7 +955,8 @@ let STATE = /*__STATE__*/null;
     else if (!res.orders_enabled) acts.append(el("span", "small", "Orders are off (dry run): this logs the order instead of sending it."));
     go.addEventListener("click", () => {
       acts.replaceChildren();
-      const yes = btn(res.is_add ? "Confirm add" : "Confirm buy", "danger"); const no = btn("Cancel", "ghost", () => renderGate(res));
+      const live = STATE.mode === "live" ? "LIVE " : "";
+      const yes = btn(res.is_add ? `Confirm ${live}add` : `Confirm ${live}buy`, "danger"); const no = btn("Cancel", "ghost", () => renderGate(res));
       yes.addEventListener("click", async () => {
         yes.disabled = true; no.disabled = true;
         try {
@@ -957,7 +1006,7 @@ let STATE = /*__STATE__*/null;
     if (!s || !s.rules) return;
     STATE = s;
     renderHeader(s); renderKpis(s); renderWeather(s); renderBreaker(s); renderMix(s); renderFilters(s); renderRows(s);
-    renderStrikes(s); renderFeed(s); renderJournal(s); renderWatch(s); renderSettings(s); renderNotes(s);
+    renderUnmanaged(s); renderStrikes(s); renderFeed(s); renderJournal(s); renderWatch(s); renderSettings(s); renderNotes(s);
   }
   async function refresh() { try { render(await api("api/state")); } catch (e) { const b = $("banner"); b.textContent = "Can't reach the trading service: " + e.message; b.hidden = false; } }
 

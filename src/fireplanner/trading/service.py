@@ -58,11 +58,14 @@ class TradingService:
     def __init__(self, broker: Broker, journal: Journal, rules: TradingRules, *,
                  orders_enabled: bool = False, notifier=None, seed_watchlist=(), lot_sizes: dict | None = None,
                  weather_proxies: dict | None = None, earnings: EarningsCalendar | None = None,
-                 breadth_baskets: dict | bool | None = None, breadth_per_cycle: int = 8, avwap_per_cycle: int = 4):
+                 breadth_baskets: dict | bool | None = None, breadth_per_cycle: int = 8, avwap_per_cycle: int = 4,
+                 manage_existing: bool = False):
         self.broker, self.journal = broker, journal
         self.base_rules = rules
         self.rules = with_overrides(rules, journal.settings())
         self.orders_enabled = orders_enabled
+        #: On the very first run, take over positions already in the account (False: leave them alone).
+        self.manage_existing = manage_existing
         self.notifier = notifier
         self.lot_sizes = {str(k).upper(): int(v) for k, v in (lot_sizes or {}).items()}
         breadth = None
@@ -247,13 +250,24 @@ class TradingService:
             except Exception as exc:
                 self._resolve_err[w["key"]] = (str(exc), time.time())
 
+        # Positions the guardian leaves alone: holdings that were already in the account on the
+        # first run (unless manage_existing), and any you released. They get no stop or target.
+        self._first_run(positions, now)
+        unmanaged = self.journal.unmanaged()
+        for cid in set(unmanaged) - set(held):
+            self.journal.manage(cid)                    # sold: a later rebuy is a new, managed trade
+        skip = set(unmanaged) & set(held)
+        managed_positions = [p for p in positions if p.con_id not in skip]
+        self._unmanaged_pos = {cid: held[cid] for cid in skip}
+        held = {cid: p for cid, p in held.items() if cid not in skip}
+
         insts = list(self._inst.values())
         self._fx = {}
         fx = {c: self._usd(c) for c in {i.currency for i in insts} | {"USD"}}
         quotes = self.broker.quotes(insts)
         atr = {i.con_id: self._atr_for(i, today.isoformat()) for i in insts}
 
-        for e in sync_trades(self.journal, positions, self.broker.fills(), quotes, self._inst, atr, fx,
+        for e in sync_trades(self.journal, managed_positions, self.broker.fills(), quotes, self._inst, atr, fx,
                              self.rules, today, now=now):
             self.emit(e.level, e.kind, e.message, key=e.key)
 
@@ -264,6 +278,7 @@ class TradingService:
         self._execute(actions, before)
 
         self._positions, self._quotes, self._orders = held, quotes, self.broker.open_orders()
+        self._fx_snapshot = fx
         try:
             self._cash = self.broker.cash()
         except Exception:
@@ -290,6 +305,21 @@ class TradingService:
         self.cycles += 1
         self.last_error = None
         return state
+
+    def _first_run(self, positions, now: datetime) -> None:
+        if self.journal.settings().get("baseline_at"):
+            return
+        left = []
+        if not self.manage_existing:
+            for p in positions:
+                if p.qty > 0 and self.journal.open_trade_for(p.con_id) is None:
+                    self.journal.leave_alone(p.con_id, f"{p.symbol}:{p.market}", "existing")
+                    left.append(p.symbol)
+        self.journal.set_setting("baseline_at", now.isoformat())
+        if left:
+            self.emit("info", "baseline",
+                      f"{len(left)} position(s) already in the account are left alone: {', '.join(sorted(left))}. "
+                      f"Choose Manage on the dashboard for any the guardian should protect.")
 
     def _time_stopped(self, t: Trade, now: datetime) -> bool:
         weeks = (now - t.opened).total_seconds() / (7 * 86400)
@@ -474,6 +504,20 @@ class TradingService:
                 "exit": ", ".join(sorted({e.kind for e in journal.exits(t.id)})),
             })
 
+        unmanaged = []
+        um_rows = journal.unmanaged()
+        for cid, p in getattr(self, "_unmanaged_pos", {}).items():
+            inst = self._inst.get(cid)
+            last = self._quotes.get(cid)
+            usd = fx.get(p.currency, 1.0)
+            unmanaged.append({
+                "key": inst.key if inst else f"{p.symbol}:{p.market}", "symbol": p.symbol, "market": p.market,
+                "name": inst.description if inst else "", "qty": p.qty, "avg_cost": p.avg_cost, "last": last,
+                "currency": p.currency, "decimals": inst.decimals(last or p.avg_cost or 1) if inst else 2,
+                "value_usd": (inst.value(p.qty, last) * usd) if inst and last else None,
+                "reason": um_rows.get(cid, {}).get("reason", "existing"),
+            })
+
         cash = self._cash
         breaker = breaker_state(journal, rules, now)
         weather = {}
@@ -500,6 +544,7 @@ class TradingService:
             "buckets": [b.as_dict() for b in mix],
             "sectors": sorted(by_sector.values(), key=lambda g: (-g["n"], -g["value_usd"])),
             "positions": rows,
+            "unmanaged": sorted(unmanaged, key=lambda u: u["key"]),
             "watchlist": watch,
             "strikes": board,
             "weather": weather,
@@ -652,6 +697,37 @@ class TradingService:
                   key=t.key)
         return {"ok": True, "message": f"Sent: {desc}."}
 
+    def adopt(self, key: str) -> dict:
+        """Start managing a position the guardian was leaving alone."""
+        sym, mkt = parse_symbol(key)
+        key = f"{sym}:{mkt}"
+        hit = [cid for cid, r in self.journal.unmanaged().items() if r["key"] == key]
+        if not hit:
+            raise LookupError(f"{key} isn't on the list of positions left alone.")
+        for cid in hit:
+            self.journal.manage(cid)
+        self.emit("info", "adopt", f"Now managing {key}: its GTC stop and target go on at the next cycle, "
+                  f"from its average cost.", key=key)
+        return {"ok": True, "message": f"{key} is now managed. Its stop and target follow within a cycle."}
+
+    def release(self, key: str) -> dict:
+        """Stop managing a position: cancel this system's stop and target on it and leave it alone."""
+        sym, mkt = parse_symbol(key)
+        t = self._open_trade(f"{sym}:{mkt}")
+        if t is None:
+            raise LookupError(f"No managed position in {sym}:{mkt}.")
+        mine = [o for o in self.broker.open_orders() if o.con_id == t.con_id and o.role in ("stop", "target")]
+        if self.orders_enabled:
+            for o in mine:
+                self.broker.cancel(o)
+        self.journal.update_trade(t.id, status="released", closed_at=self.broker.now().isoformat(timespec="seconds"),
+                                  note=(t.note + " · released").strip(" ·"))
+        self.journal.leave_alone(t.con_id, t.key, "released")
+        verb = "cancelled" if self.orders_enabled else "would be cancelled (dry run)"
+        self.emit("warn", "release", f"{t.key} is no longer managed: its stop and target {verb}. "
+                  f"It has no stop from this system now.", key=t.key)
+        return {"ok": True, "message": f"{t.key} released: {len(mine)} order(s) {verb}. It has no stop from this system."}
+
     def unlock(self, key: str) -> dict:
         sym, mkt = parse_symbol(key)
         key = f"{sym}:{mkt}"
@@ -741,7 +817,7 @@ class TradingService:
         self.emit("info", "bucket", f"{key} confirmed as {b.name} (target +{b.target:.0%}).", key=key)
         return {"ok": True, "message": f"{key} is now {b.name}."}
 
-    _COMMANDS = {"check", "enter", "add_to", "exit_position", "unlock", "pause", "resume", "kill",
+    _COMMANDS = {"check", "enter", "add_to", "exit_position", "adopt", "release", "unlock", "pause", "resume", "kill",
                  "set_earnings", "set_sector", "set_settings", "set_trade_note",
                  "watch_add", "watch_remove", "set_bucket"}
 

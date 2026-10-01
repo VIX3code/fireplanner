@@ -42,9 +42,12 @@ def us(sym="NVDA", cid=1, **kw) -> Instrument:
 
 
 def make(orders=True, cash=100_000.0):
+    """A service that has already taken its first look at an empty account, as when you start
+    the guardian and then trade."""
     broker = SimBroker(cash_usd=cash, clock=T0)
     journal = Journal(":memory:")
     svc = TradingService(broker, journal, RULES, orders_enabled=orders)
+    svc.cycle()
     return broker, journal, svc
 
 
@@ -1063,3 +1066,65 @@ def test_page_has_collapsible_cards_and_relative_api_paths():
     page = render_dashboard({})
     assert 'id="fold-all"' in page and 'id="unfold-all"' in page and "button.fold" in page
     assert '"/api/' not in page and 'api("api/state")' in page      # works behind /desk/ too
+
+
+# ---------------------------------------------------------------- existing holdings on a real account
+
+def test_holdings_already_in_the_account_are_left_alone():
+    broker = SimBroker(clock=T0)
+    journal = Journal(":memory:")
+    broker.add(us("VTI", 70), 300.0, 0.011)
+    broker.hold(70, 200, 250.0)                               # a long-term holding, bought years ago
+    svc = TradingService(broker, journal, RULES, orders_enabled=True)
+    state = svc.cycle()                                       # the guardian's first look
+    assert not broker.open_orders() and not journal.open_trades()
+    assert [u["key"] for u in state["unmanaged"]] == ["VTI:US"]
+    assert any(e["kind"] == "baseline" for e in journal.events(5))
+    nv = broker.add(us(), 190.0, 0.036)
+    buy(broker, svc, nv, 190.0)                               # a new trade after it started: managed
+    assert {o.con_id for o in managed(broker)} == {1}
+    svc.cycle()
+    assert not [o for o in broker.open_orders() if o.con_id == 70]   # still never touched
+
+
+def test_manage_an_existing_holding_then_release_it():
+    broker = SimBroker(clock=T0)
+    journal = Journal(":memory:")
+    broker.add(us("KO", 2), 69.0, 0.011)
+    broker.hold(2, 100, 66.0)
+    svc = TradingService(broker, journal, RULES, orders_enabled=True)
+    svc.cycle()
+    svc.adopt("KO")
+    svc.cycle()
+    t = journal.open_trades()[0]
+    assert t.entry == 66.0 and managed(broker, "stop")         # protected from its average cost
+    r = svc.release("KO")
+    assert r["ok"] and not managed(broker)
+    state = svc.cycle()
+    assert not journal.open_trades() and state["unmanaged"][0]["reason"] == "released"
+    assert not journal.closed_trades()                         # a release is not a trade result
+    assert not managed(broker)
+
+
+def test_a_sold_holding_drops_off_and_a_rebuy_is_managed():
+    broker = SimBroker(clock=T0)
+    journal = Journal(":memory:")
+    inst = broker.add(us("AAPL", 3), 200.0, 0.02)
+    broker.hold(3, 10, 150.0)
+    svc = TradingService(broker, journal, RULES, orders_enabled=True)
+    svc.cycle()
+    broker._pos[3] = [0, 0.0]                                  # sold in TWS
+    svc.cycle()
+    assert not journal.unmanaged()
+    buy(broker, svc, inst, 200.0)
+    assert managed(broker, "stop")
+
+
+def test_manage_existing_takes_everything_over():
+    broker = SimBroker(clock=T0)
+    journal = Journal(":memory:")
+    broker.add(us("KO", 2), 69.0, 0.011)
+    broker.hold(2, 100, 68.0)
+    svc = TradingService(broker, journal, RULES, orders_enabled=True, manage_existing=True)
+    svc.cycle()
+    assert managed(broker, "stop") and not journal.unmanaged()

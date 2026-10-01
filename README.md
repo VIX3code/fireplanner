@@ -441,14 +441,14 @@ src/fireplanner/
                  earnings.py earnings dates; stats.py the journal graded in R
                  service.py the loop; server.py the live dashboard
                  sim.py     in-memory broker; ib_broker.py TWS / IB Gateway
-tests/           224 tests
+tests/           228 tests
 data/snapshots/  real IBKR pulls: SPY, VIX, RSP, NVDA, ZS, MP, FTNT + account state
 ```
 
 ## Correctness
 
 ```bash
-PYTHONPATH=src python3 -m pytest tests/ -q      # 224 passed
+PYTHONPATH=src python3 -m pytest tests/ -q      # 228 passed
 ```
 
 The tests that matter most:

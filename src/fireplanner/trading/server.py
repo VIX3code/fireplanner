@@ -11,6 +11,7 @@ Standard library only. It serves one page and a JSON API:
 ``POST /api/add``           add to a winner
 ``POST /api/exit``          sell a whole position now
 ``POST /api/unlock``        unlock a stock after two strikes
+``POST /api/adopt``         start managing a position left alone; ``/api/release`` stops
 ``POST /api/pause``         pause new buys; ``/api/resume``; ``/api/kill``
 ``POST /api/watch``         add a ticker to the watchlist; ``/api/unwatch``
 ``POST /api/bucket``        confirm a stock's type
@@ -129,6 +130,8 @@ def make_server(service, host: str = "127.0.0.1", port: int = 8765, token: str =
                 "/api/add": ("add_to", ("key", "limit", "expect_qty")),
                 "/api/exit": ("exit_position", ("key",)),
                 "/api/unlock": ("unlock", ("key",)),
+                "/api/adopt": ("adopt", ("key",)),
+                "/api/release": ("release", ("key",)),
                 "/api/pause": ("pause", ("note",)),
                 "/api/resume": ("resume", ()),
                 "/api/kill": ("kill", ()),

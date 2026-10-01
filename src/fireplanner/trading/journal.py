@@ -101,6 +101,12 @@ CREATE TABLE IF NOT EXISTS breaker (
     kind TEXT NOT NULL,
     note TEXT NOT NULL DEFAULT ''
 );
+CREATE TABLE IF NOT EXISTS unmanaged (
+    con_id INTEGER PRIMARY KEY,
+    key TEXT NOT NULL,
+    reason TEXT NOT NULL,
+    since TEXT NOT NULL
+);
 CREATE TABLE IF NOT EXISTS pending (
     key TEXT PRIMARY KEY,
     setup TEXT NOT NULL DEFAULT '',
@@ -372,6 +378,17 @@ class Journal:
             return None
         self._exec("DELETE FROM pending WHERE key = ?", (key,))
         return dict(rows[0])
+
+    # -- positions the guardian leaves alone --------------------------------
+    def leave_alone(self, con_id: int, key: str, reason: str = "existing") -> None:
+        self._exec("INSERT OR REPLACE INTO unmanaged (con_id, key, reason, since) VALUES (?,?,?,?)",
+                   (int(con_id), key, reason, _iso(now_utc())))
+
+    def manage(self, con_id: int) -> None:
+        self._exec("DELETE FROM unmanaged WHERE con_id = ?", (int(con_id),))
+
+    def unmanaged(self) -> dict[int, dict]:
+        return {r["con_id"]: dict(r) for r in self._rows("SELECT * FROM unmanaged ORDER BY key")}
 
     # -- earnings and sectors --------------------------------------------------
     def set_earnings(self, key: str, day: date | None, source: str = "manual") -> None:

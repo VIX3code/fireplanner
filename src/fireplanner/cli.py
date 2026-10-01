@@ -321,7 +321,8 @@ def _trade_service(args):
                              notifier=notifier, seed_watchlist=settings["watchlist"],
                              lot_sizes=settings["lot_sizes"], weather_proxies=settings["weather"],
                              breadth_baskets=settings["breadth"].get("baskets") or None,
-                             breadth_per_cycle=int(settings["breadth"].get("per_cycle", 8)))
+                             breadth_per_cycle=int(settings["breadth"].get("per_cycle", 8)),
+                             manage_existing=bool(settings["manage_existing"]))
     return service, settings
 
 

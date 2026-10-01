@@ -80,6 +80,10 @@ def run_doctor(broker, rules: TradingRules, settings: dict) -> list[Finding]:
         orders = broker.open_orders()
         add(Finding("good", "Positions and orders readable",
                     f"{len(pos)} position(s), {len(orders)} working order(s)"))
+        if pos and not settings.get("manage_existing"):
+            add(Finding("info", f"{len(pos)} position(s) already in the account",
+                        "On the guardian's first run these are left alone (no stop, no target). Choose Manage "
+                        "on the dashboard for any it should protect. Anything bought afterwards is managed."))
     except Exception as exc:
         add(Finding("crit", "Can't read positions or orders", str(exc)))
     try:
